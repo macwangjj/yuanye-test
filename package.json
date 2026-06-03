@@ -1,0 +1,12 @@
+{
+  "name": "seamless-studio",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "YUANYE_HOST=127.0.0.1 node server.js",
+    "lan": "YUANYE_HOST=0.0.0.0 node server.js",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

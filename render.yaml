@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: yuanye-test
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: YUANYE_HOST
+        value: 0.0.0.0
+      - key: OPENAI_BASE_URL
+        value: https://maimai.it.com/v1
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-2
+      - key: OPENAI_CHAT_MODEL
+        value: gpt-5.5
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: YUANYE_PASSWORD
+        sync: false
+      - key: YUANYE_SESSION_SECRET
+        generateValue: true

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YUANYE 元也 · 新版测试网站</title>
+    <link rel="stylesheet" href="./styles.css?v=0.7.14-test" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">YUANYE · 元也 · 新版测试网站</p>
+          <h1>YUANYE 测试版</h1>
+          <p class="subtitle">新版四方连续无缝循环测试网站，面向服装面料开发。</p>
+        </div>
+        <div class="server-pill" id="serverStatus">正在连接本地服务</div>
+      </header>
+
+      <section class="control-bar">
+        <label class="upload-card" for="fileInput">
+          <input id="fileInput" type="file" accept="image/*" multiple />
+          <span class="upload-plus">+</span>
+          <strong>批量上传参考图</strong>
+          <small>每张图片会生成一个独立任务</small>
+        </label>
+
+        <div class="settings-card">
+          <label>
+            风格补充
+            <textarea id="styleNotes" rows="3" placeholder="例如：低饱和、水彩植物、线条轻盈、留白多。"></textarea>
+          </label>
+          <div class="settings-row">
+            <label>
+              构图密度
+              <select id="density">
+                <option value="稀疏型构图，元素之间保留充分呼吸感" selected>稀疏</option>
+                <option value="中低密度构图，保持均衡留白">中低</option>
+              </select>
+            </label>
+            <label>
+              输出比例
+              <select id="size">
+                <option value="1024x1536" selected>竖版 42 × 64</option>
+                <option value="auto">自动</option>
+              </select>
+            </label>
+          </div>
+          <div class="settings-row">
+            <label>
+              花型编号规则
+              <input id="codeRule" type="text" value="YY+日期+001" placeholder="YY+日期+001 / YY-WJ-{seq3}" />
+            </label>
+            <label>
+              编号预览
+              <input id="codePreview" type="text" placeholder="可直接修改下一张编号" />
+            </label>
+          </div>
+          <div class="settings-row">
+            <label class="toggle-line">
+              <input id="autoEnhance" type="checkbox" />
+              <span>生成后自动高清</span>
+            </label>
+            <label>
+              高清强度
+              <select id="enhanceStrength">
+                <option value="light">轻微</option>
+                <option value="medium" selected>标准</option>
+                <option value="strong">强</option>
+              </select>
+            </label>
+          </div>
+          <div class="settings-row single-setting">
+            <label>
+              裂变强度
+              <select id="fissionStrength">
+                <option value="light">轻度：微换元素</option>
+                <option value="medium" selected>中度：明显换元素</option>
+                <option value="strong">强度：重组元素库</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="action-card">
+          <div>
+            <span>目标规格</span>
+            <strong>42cm × 64cm · 300dpi · JPG</strong>
+            <small>约 4961 × 7559 px，生成后先检查，轻微问题先轻修，严重问题再重生。</small>
+          </div>
+          <div class="action-buttons">
+            <button class="primary" id="startAll">一键开始生成</button>
+            <button class="secondary" id="resumeGeneration">恢复生成</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="task-section">
+        <div class="section-head">
+          <div>
+            <h2>任务队列</h2>
+            <p>上传参考图后，这里会显示每一张图片的生成进度和下载入口。</p>
+          </div>
+          <div class="head-actions">
+            <button class="secondary" id="downloadSelected">批量下载</button>
+            <button class="secondary" id="pauseAll">暂停所有任务</button>
+            <button class="secondary" id="clearAllTasks">清除当前任务栏</button>
+            <button class="secondary" id="clearDone">清理已完成</button>
+          </div>
+        </div>
+
+        <div class="empty-state" id="emptyState">
+          <strong>还没有任务</strong>
+          <span>把参考图拖进来，或者点击上方上传。</span>
+        </div>
+
+        <div class="task-list" id="taskList"></div>
+      </section>
+
+      <section class="task-section history-section">
+        <div class="section-head">
+          <div>
+            <h2>历史记录</h2>
+            <p>生成成功的成品会保存在本机，可回看、下载和复检四方循环。</p>
+          </div>
+          <div class="head-actions">
+            <button class="secondary" id="selectAllHistory">全选当前任务</button>
+            <button class="secondary" id="refreshHistory">刷新历史</button>
+          </div>
+        </div>
+        <div class="history-grid" id="historyGrid"></div>
+      </section>
+    </main>
+
+    <template id="taskTemplate">
+      <article class="task-card">
+        <div class="thumb source-thumb"></div>
+        <div class="task-main">
+          <div class="task-title-row">
+            <div>
+              <h3 class="task-name"></h3>
+              <p class="task-meta">等待生成</p>
+            </div>
+            <span class="status-badge">待处理</span>
+          </div>
+          <div class="progress-track"><span></span></div>
+          <p class="task-message">准备就绪。</p>
+        </div>
+        <div class="result-pane">
+          <label class="select-pill">
+            <input class="select-one" type="checkbox" disabled />
+            <span>选择</span>
+          </label>
+          <div class="thumb result-thumb"><span>成品预览</span></div>
+          <div class="button-row">
+            <button class="secondary generate-one">生成</button>
+            <button class="secondary fission-one" disabled>以图裂变</button>
+            <button class="secondary enhance-one" disabled>一键高清</button>
+            <button class="secondary repair-one" disabled>轻修一次</button>
+            <button class="secondary check-one" disabled>检查循环</button>
+            <button class="secondary download-one" disabled>下载 JPG</button>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js?v=0.7.14-test"></script>
+  </body>
+</html>

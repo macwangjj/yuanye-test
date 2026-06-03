@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>登录 YUANYE 元也</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="login-page">
+    <main class="login-shell">
+      <section class="login-card">
+        <p class="eyebrow">YUANYE · 元也</p>
+        <h1>登录</h1>
+        <p class="subtitle">请输入授权密码后使用云端四方连续印花工作台。</p>
+        <form id="loginForm" class="login-form">
+          <label>
+            授权密码
+            <input id="password" type="password" autocomplete="current-password" autofocus />
+          </label>
+          <button class="primary" type="submit">进入工作台</button>
+          <p class="login-message" id="loginMessage"></p>
+        </form>
+      </section>
+    </main>
+    <script>
+      const form = document.querySelector("#loginForm");
+      const password = document.querySelector("#password");
+      const message = document.querySelector("#loginMessage");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        message.textContent = "正在登录...";
+
+        try {
+          const response = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: password.value }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.error || "登录失败");
+          window.location.href = "/";
+        } catch (error) {
+          message.textContent = error.message;
+        }
+      });
+    </script>
+  </body>
+</html>

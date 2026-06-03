@@ -1,0 +1,9 @@
+.env
+node_modules/
+logs/
+history/
+.DS_Store
+*.zip
+*.tar.gz
+conversation-archive/
+YUANYE启动.app/
