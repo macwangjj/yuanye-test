@@ -7,3 +7,4 @@ history/
 *.tar.gz
 conversation-archive/
 YUANYE启动.app/
+.deploy/
