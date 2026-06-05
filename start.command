@@ -41,8 +41,9 @@ if [ -z "$OPENAI_API_KEY" ] || [[ "$OPENAI_API_KEY" == *"这里粘贴"* ]] || [[
 
   cat > ".env" <<EOF
 OPENAI_API_KEY="$OPENAI_API_KEY"
-OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.shubiaobiao.com/v1}"
+OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://maimai.it.com/v1}"
 OPENAI_IMAGE_MODEL="${OPENAI_IMAGE_MODEL:-gpt-image-2}"
+OPENAI_CHAT_MODEL="${OPENAI_CHAT_MODEL:-gpt-5.5}"
 PORT="${PORT:-4185}"
 EOF
 
@@ -97,8 +98,11 @@ if [ -z "$NODE_BIN" ]; then
 fi
 
 export OPENAI_API_KEY
-export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.shubiaobiao.com/v1}"
+export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://maimai.it.com/v1}"
 export OPENAI_IMAGE_MODEL="${OPENAI_IMAGE_MODEL:-gpt-image-2}"
+export OPENAI_CHAT_MODEL="${OPENAI_CHAT_MODEL:-gpt-5.5}"
+export OPENAI_IMAGE_TIMEOUT_MS="${OPENAI_IMAGE_TIMEOUT_MS:-300000}"
+export YUANYE_GENERATE_TIMEOUT_MS="${YUANYE_GENERATE_TIMEOUT_MS:-460000}"
 export PORT
 if [ "$YUANYE_LAN" = "1" ]; then
   export YUANYE_HOST="0.0.0.0"

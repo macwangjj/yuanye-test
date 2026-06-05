@@ -16,6 +16,11 @@ fi
 
 PORT="${PORT:-4185}"
 YUANYE_HOST="${YUANYE_HOST:-127.0.0.1}"
+OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://maimai.it.com/v1}"
+OPENAI_IMAGE_MODEL="${OPENAI_IMAGE_MODEL:-gpt-image-2}"
+OPENAI_CHAT_MODEL="${OPENAI_CHAT_MODEL:-gpt-5.5}"
+OPENAI_IMAGE_TIMEOUT_MS="${OPENAI_IMAGE_TIMEOUT_MS:-300000}"
+YUANYE_GENERATE_TIMEOUT_MS="${YUANYE_GENERATE_TIMEOUT_MS:-460000}"
 
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,7 +33,7 @@ cat > "$PLIST" <<EOF
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd "$PROJECT_DIR" &amp;&amp; export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH" &amp;&amp; export PORT="$PORT" &amp;&amp; export YUANYE_HOST="$YUANYE_HOST" &amp;&amp; exec node server.js</string>
+    <string>cd "$PROJECT_DIR" &amp;&amp; export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH" &amp;&amp; export PORT="$PORT" &amp;&amp; export YUANYE_HOST="$YUANYE_HOST" &amp;&amp; export OPENAI_BASE_URL="$OPENAI_BASE_URL" &amp;&amp; export OPENAI_IMAGE_MODEL="$OPENAI_IMAGE_MODEL" &amp;&amp; export OPENAI_CHAT_MODEL="$OPENAI_CHAT_MODEL" &amp;&amp; export OPENAI_IMAGE_TIMEOUT_MS="$OPENAI_IMAGE_TIMEOUT_MS" &amp;&amp; export YUANYE_GENERATE_TIMEOUT_MS="$YUANYE_GENERATE_TIMEOUT_MS" &amp;&amp; exec node server.js</string>
   </array>
   <key>WorkingDirectory</key>
   <string>$PROJECT_DIR</string>

@@ -19,11 +19,13 @@ const imageModel = (process.env.OPENAI_IMAGE_MODEL || "gpt-image-2").trim();
 const imageModelCandidates = unique([imageModel, "gpt-image-2", "gpt-image-1.5", "gpt-image-1"]);
 const apiBaseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
 const imageEditUrl = `${apiBaseUrl}/images/edits`;
-const appVersion = "0.7.14-test";
+const appVersion = "0.7.15-test";
 const appPassword = (process.env.YUANYE_PASSWORD || "").trim();
 const sessionSecret = (process.env.YUANYE_SESSION_SECRET || apiKey || appPassword || randomBytes(32).toString("hex")).trim();
 const authEnabled = appPassword.length > 0;
 const execFileAsync = promisify(execFile);
+const imageRequestTimeoutMs = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS || 300000);
+const generateRouteTimeoutMs = Number(process.env.YUANYE_GENERATE_TIMEOUT_MS || 460000);
 
 function loadDotEnv() {
   const envPath = join(root, ".env");
@@ -364,6 +366,15 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function withOperationTimeout(promise, timeoutMs, message) {
+  let timeout;
+  const guard = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timeout));
+}
+
 function normalizeImageType(type) {
   if (["image/png", "image/jpeg", "image/webp"].includes(type)) {
     return type;
@@ -406,14 +417,14 @@ async function callImageEditJson({ imageDataUrl, prompt, size, highQuality, mode
     body.output_compression = 95;
   }
 
-  const response = await fetch(imageEditUrl, {
+  const response = await fetchWithTimeout(imageEditUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  });
+  }, imageRequestTimeoutMs, `json:${model}`);
 
   return await readImageResponse(response, `json:${model}`);
 }
@@ -436,15 +447,34 @@ async function callImageEditMultipart({ imageBlob, maskBlob, prompt, size, highQ
     form.append("output_compression", "95");
   }
 
-  const response = await fetch(imageEditUrl, {
+  const response = await fetchWithTimeout(imageEditUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
     },
     body: form,
-  });
+  }, imageRequestTimeoutMs, `multipart:${fieldName}:${model}`);
 
   return await readImageResponse(response, `multipart:${fieldName}:${model}`);
+}
+
+async function fetchWithTimeout(url, options, timeoutMs, attempt) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`图片接口等待超过 ${Math.round(timeoutMs / 1000)} 秒，已自动停止本次尝试。（attempt=${attempt}）`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function callImageEditCurl({ imageBlob, maskBlob, prompt, size, highQuality, model }) {
@@ -740,7 +770,11 @@ const server = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/api/generate") {
       const body = await readBody(request);
       const payload = JSON.parse(body);
-      const image = await generateImage(payload);
+      const image = await withOperationTimeout(
+        generateImage(payload),
+        generateRouteTimeoutMs,
+        `生成等待超过 ${Math.round(generateRouteTimeoutMs / 1000)} 秒，请稍后重试；如果连续出现，请减少自动重生次数或检查图片接口状态。`,
+      );
       sendJson(response, 200, { image });
       return;
     }
