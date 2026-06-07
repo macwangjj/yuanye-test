@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.47-test";
+const clientVersion = "0.7.48-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -1174,6 +1174,9 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
           finalAction = "repair";
           break;
         }
+        if (fallback?.candidate) {
+          bestCandidate = rememberBestTaskCandidate(fallback.candidate, fallback.check, bestCandidate);
+        }
       }
 
       bestCandidate = rememberBestTaskCandidate(task, lastCheck, bestCandidate);
@@ -1489,7 +1492,14 @@ async function tryCertifiedSeamlessFallback(task, baseCheck) {
   const candidateJpgUrl = await makeStrictSeamlessJpg(task.resultJpgUrl, baseCheck);
   const candidateCheck = applyAspectWarpCheck(await checkSeamQuality(candidateJpgUrl), task.exportMetrics?.aspectWarp);
   if (!candidateCheck.passed) {
-    return { accepted: false, check: candidateCheck };
+    return {
+      accepted: false,
+      check: candidateCheck,
+      candidate: captureExternalTaskCandidate(task, candidateJpgUrl, candidateCheck, {
+        locallyRepaired: true,
+        qualityPassed: false,
+      }),
+    };
   }
 
   task.repairAttempts += 1;
@@ -1625,6 +1635,22 @@ function captureTaskCandidate(task, check) {
     seamRating: task.seamRating,
     locallyRepaired: task.locallyRepaired,
     qualityPassed: task.qualityPassed,
+    check: clonePlain(check),
+  };
+}
+
+function captureExternalTaskCandidate(task, resultJpgUrl, check, overrides = null) {
+  const options = overrides || {};
+  return {
+    resultDataUrl: resultJpgUrl,
+    resultJpgUrl,
+    seamCheck: clonePlain(check),
+    repairCheck: clonePlain(check),
+    exportMetrics: clonePlain(task?.exportMetrics),
+    seamScore: check?.score ?? null,
+    seamRating: check?.rating || "",
+    locallyRepaired: Boolean(options.locallyRepaired),
+    qualityPassed: Boolean(options.qualityPassed),
     check: clonePlain(check),
   };
 }

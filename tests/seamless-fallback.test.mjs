@@ -99,6 +99,14 @@ test("generation tries strict certified fallback before automatic regeneration",
   assert.ok(fallbackIndex < regenerationIndex, "fallback candidate must run before the next regeneration attempt");
 });
 
+test("rejected strict fallback exposes a discardable candidate for best-candidate retention", () => {
+  const fallbackSource = extractFunction(appSource, "tryCertifiedSeamlessFallback");
+
+  assert.match(fallbackSource, /candidate: captureExternalTaskCandidate\(task, candidateJpgUrl, candidateCheck/, "failed strict fallback should expose its image as a candidate");
+  assert.match(fallbackSource, /accepted: false/, "failed strict fallback must remain rejected for certification");
+  assert.match(fallbackSource, /if \(!candidateCheck\.passed\)/, "candidate exposure should happen only in the rejected branch");
+});
+
 test("forced periodic repair stabilizes four-corner junctions", () => {
   const forcePeriodicSource = extractFunction(appSource, "forcePeriodicSeams");
   const shouldStabilizePeriodicCorners = compileFunction(appSource, "shouldStabilizePeriodicCorners");

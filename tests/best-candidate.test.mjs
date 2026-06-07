@@ -56,12 +56,15 @@ test("best candidate memory replaces an older failed image when a later candidat
 test("generation loop remembers failed candidates before auto-regeneration and restores the best one before review", () => {
   const generateTaskSource = extractFunction(appSource, "generateTask");
   const rememberIndex = generateTaskSource.indexOf("bestCandidate = rememberBestTaskCandidate(task, lastCheck, bestCandidate)");
+  const fallbackRememberIndex = generateTaskSource.indexOf("bestCandidate = rememberBestTaskCandidate(fallback.candidate, fallback.check, bestCandidate)");
   const regenerationIndex = generateTaskSource.indexOf("task.autoRegenerated = true");
   const restoreIndex = generateTaskSource.indexOf("restoreTaskCandidate(task, bestCandidate)");
   const finalGateIndex = generateTaskSource.indexOf("task.nodes.enhance.disabled = false");
 
   assert.notEqual(rememberIndex, -1, "failed attempts should be remembered as best-candidate contenders");
+  assert.notEqual(fallbackRememberIndex, -1, "failed strict-seamless fallback candidates should also compete as best candidates");
   assert.notEqual(regenerationIndex, -1, "generation loop should still auto-regenerate failed attempts");
+  assert.ok(fallbackRememberIndex < regenerationIndex, "discardable strict fallback candidates must be considered before regeneration overwrites the task");
   assert.ok(rememberIndex < regenerationIndex, "candidate must be captured before the attempt is overwritten by regeneration");
   assert.notEqual(restoreIndex, -1, "failed generation should restore the best candidate before review");
   assert.ok(restoreIndex < finalGateIndex, "best candidate must be restored before download gates and history save run");
@@ -73,6 +76,7 @@ function loadBestCandidateHelpers() {
     extractFunction(appSource, "isSeamCheckBetter"),
     extractFunction(appSource, "clonePlain"),
     extractFunction(appSource, "captureTaskCandidate"),
+    extractFunction(appSource, "captureExternalTaskCandidate"),
     extractFunction(appSource, "rememberBestTaskCandidate"),
     extractFunction(appSource, "restoreTaskCandidate"),
   ].join("\n");

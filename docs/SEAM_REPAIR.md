@@ -289,6 +289,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The restored candidate remains non-downloadable until it passes the full commercial certification gate, but human review and any follow-up repair now start from the best available base image.
 - Tests cover candidate cloning, later-worse rejection, later-better replacement, and generation-loop placement before auto-regeneration and final review.
 
+## 0.7.48 Discarded Fallback Candidate Retention
+
+- Rejected strict-seamless fallback candidates are no longer thrown away blindly.
+- If the strict fallback fails certification but scores better than other failed attempts, it can become the restored review candidate while still remaining non-downloadable.
+- This lets human review, fission, or follow-up repair start from a locally improved seam base without weakening the commercial gate.
+- Tests confirm rejected fallback branches expose a candidate, and the generation loop considers that candidate before automatic regeneration overwrites the current task image.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
