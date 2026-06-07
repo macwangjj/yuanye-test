@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.46-test";
+const clientVersion = "0.7.47-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -1087,6 +1087,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
   try {
     let lastCheck = null;
     let finalAction = "review";
+    let bestCandidate = null;
     for (let attempt = 1; attempt <= maxAutoRegenerations + 1; attempt += 1) {
       task.generationAttempts = attempt;
       phase = "请求图片生成接口";
@@ -1175,11 +1176,17 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
         }
       }
 
+      bestCandidate = rememberBestTaskCandidate(task, lastCheck, bestCandidate);
       task.autoRegenerated = true;
       if (attempt <= maxAutoRegenerations) {
         setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，准备自动重生 ${attempt}/${maxAutoRegenerations}。`, 96);
         await delay(800);
       }
+    }
+
+    if (!lastCheck?.passed && bestCandidate && isSeamCheckBetter(bestCandidate.check, lastCheck)) {
+      restoreTaskCandidate(task, bestCandidate);
+      lastCheck = bestCandidate.check;
     }
 
     task.nodes.enhance.disabled = false;
@@ -1600,6 +1607,47 @@ async function improveWithAiOffsetRepair(task, initialCheck) {
   task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
   task.nodes.message.textContent = seamCheckSummary(best.check);
   return best.check;
+}
+
+function clonePlain(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function captureTaskCandidate(task, check) {
+  return {
+    resultDataUrl: task.resultDataUrl,
+    resultJpgUrl: task.resultJpgUrl,
+    seamCheck: clonePlain(task.seamCheck || check),
+    repairCheck: clonePlain(task.repairCheck),
+    exportMetrics: clonePlain(task.exportMetrics),
+    seamScore: task.seamScore,
+    seamRating: task.seamRating,
+    locallyRepaired: task.locallyRepaired,
+    qualityPassed: task.qualityPassed,
+    check: clonePlain(check),
+  };
+}
+
+function rememberBestTaskCandidate(task, check, currentBest = null) {
+  if (!task?.resultJpgUrl || !check) return currentBest;
+  const candidate = captureTaskCandidate(task, check);
+  return !currentBest || isSeamCheckBetter(candidate.check, currentBest.check) ? candidate : currentBest;
+}
+
+function restoreTaskCandidate(task, candidate) {
+  if (!candidate?.resultJpgUrl) return;
+  task.resultDataUrl = candidate.resultDataUrl || "";
+  task.resultJpgUrl = candidate.resultJpgUrl;
+  task.seamCheck = candidate.seamCheck || candidate.check;
+  task.repairCheck = candidate.repairCheck || candidate.check;
+  task.exportMetrics = candidate.exportMetrics || null;
+  task.seamScore = candidate.check?.score ?? candidate.seamScore ?? null;
+  task.seamRating = candidate.check?.rating || candidate.seamRating || seamRating(candidate.check);
+  task.locallyRepaired = Boolean(candidate.locallyRepaired);
+  task.qualityPassed = Boolean(candidate.check?.passed);
+  task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+  task.nodes.message.textContent = seamCheckSummary(candidate.check);
 }
 
 function isSeamCheckBetter(next, previous) {

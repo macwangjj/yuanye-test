@@ -281,6 +281,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The discardable strict-seamless candidate still replaces the task image only after the full commercial seam, clarity, print-spec, and download-certification gates pass.
 - Tests cover synthetic hard corner spots, verify the corner score drops after stabilization, and confirm the production force-periodic path calls the corner pass.
 
+## 0.7.47 Best Failed Candidate Retention
+
+- Automatic regeneration now remembers the best failed candidate across all attempts instead of leaving the last attempt on screen by default.
+- If no candidate passes certification, the task restores the lowest-risk candidate before review, history save, manual repair availability, and download-gate updates run.
+- The comparison uses both the overall seam score and the worst visible seam score, so a candidate with fewer hard seam artifacts is preferred even when the total score is close.
+- The restored candidate remains non-downloadable until it passes the full commercial certification gate, but human review and any follow-up repair now start from the best available base image.
+- Tests cover candidate cloning, later-worse rejection, later-better replacement, and generation-loop placement before auto-regeneration and final review.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
