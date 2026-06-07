@@ -190,6 +190,19 @@ test("print posterization check rejects visible tonal banding", () => {
   assert.ok(posterizedCheck.toneBinRatio < smoothCheck.toneBinRatio * 0.5, `posterized output should have far fewer tone bins; smooth=${smoothCheck.toneBinRatio} posterized=${posterizedCheck.toneBinRatio}`);
 });
 
+test("print compression artifact check rejects blocky macro artifacts", () => {
+  const width = 180;
+  const height = 180;
+  const clean = makeSmoothPrintPattern(width, height);
+  const blocky = makeBlockyCompressionPattern(width, height, 8);
+  const cleanCheck = measureCompressionArtifactCore(clean, width, height);
+  const blockyCheck = measureCompressionArtifactCore(blocky, width, height);
+
+  assert.equal(cleanCheck.compressionRisk, false, `clean printable texture should not look block-compressed; got ${JSON.stringify(cleanCheck)}`);
+  assert.equal(blockyCheck.compressionRisk, true, `blocky compression artifacts should be rejected; got ${JSON.stringify(blockyCheck)}`);
+  assert.ok(blockyCheck.blockScore > cleanCheck.blockScore * 4, `block artifact score should be much higher; clean=${cleanCheck.blockScore} blocky=${blockyCheck.blockScore}`);
+});
+
 test("print richness check rejects nearly empty low-information output", () => {
   const width = 160;
   const height = 160;
@@ -395,6 +408,48 @@ function posterizePrintPattern(source, levels) {
     output[index + 2] = clamp(Math.round(source[index + 2] / step) * step);
     output[index + 3] = 255;
   }
+  return output;
+}
+
+function makeBlockyCompressionPattern(width, height, block) {
+  const base = makeSmoothPrintPattern(width, height);
+  const output = new Uint8ClampedArray(base);
+
+  for (let y = 0; y < height; y += block) {
+    for (let x = 0; x < width; x += block) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let count = 0;
+
+      for (let yy = y; yy < Math.min(height, y + block); yy += 1) {
+        for (let xx = x; xx < Math.min(width, x + block); xx += 1) {
+          const index = (yy * width + xx) * 4;
+          r += base[index];
+          g += base[index + 1];
+          b += base[index + 2];
+          count += 1;
+        }
+      }
+
+      const bias = Math.round(Math.sin(x * 0.37 + y * 0.23) * 10 + (((x / block + y / block) % 2) ? 7 : -7));
+      r = r / Math.max(1, count) + bias;
+      g = g / Math.max(1, count) + bias * 0.85;
+      b = b / Math.max(1, count) + bias * 0.6;
+
+      for (let yy = y; yy < Math.min(height, y + block); yy += 1) {
+        for (let xx = x; xx < Math.min(width, x + block); xx += 1) {
+          const index = (yy * width + xx) * 4;
+          const grain = ((xx + yy) % 5) - 2;
+          output[index] = clamp(r + grain);
+          output[index + 1] = clamp(g + grain);
+          output[index + 2] = clamp(b + grain);
+          output[index + 3] = 255;
+        }
+      }
+    }
+  }
+
   return output;
 }
 
@@ -1495,6 +1550,198 @@ function measurePosterizationArtifactCore(data, width, height) {
     detailScore,
     gradientScore,
     posterizationRisk,
+  };
+}
+
+function measureCompressionArtifactCore(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 420));
+  const periods = [4, 6, 8, 10, 12, 16, 20, 24].filter((period) => period < Math.min(width, height) / 3);
+  let best = {
+    period: 0,
+    blockScore: 0,
+    gridScore: 0,
+    boundaryRatio: 0,
+    boundaryAvg: 0,
+    interiorAvg: 0,
+    peakRatio: 0,
+    axisBalance: 0,
+    flatBlockRatio: 0,
+    blockMeanJump: 0,
+    blockStd: 0,
+    localTexture: 0,
+  };
+  let detailTotal = 0;
+  let gradientTotal = 0;
+  let textureCount = 0;
+  const textureStep = Math.max(1, Math.round(Math.max(width, height) / 180));
+
+  for (let y = textureStep; y < height - textureStep; y += textureStep) {
+    for (let x = textureStep; x < width - textureStep; x += textureStep) {
+      const detail = pixelDetailAt(data, width, height, x, y);
+      detailTotal += detail.detail;
+      gradientTotal += detail.gradient;
+      textureCount += 1;
+    }
+  }
+
+  const localTexture = (detailTotal * 0.68 + gradientTotal * 0.32) / Math.max(1, textureCount);
+
+  for (const period of periods) {
+    const vertical = measureCompressionGridAxisCore(data, width, height, period, false, sampleStep);
+    const horizontal = measureCompressionGridAxisCore(data, width, height, period, true, sampleStep);
+    const blocks = measureCompressionBlocksCore(data, width, height, period, localTexture);
+    const boundaryRatio = (vertical.boundaryRatio + horizontal.boundaryRatio) / 2;
+    const peakRatio = (vertical.peakRatio + horizontal.peakRatio) / 2;
+    const boundaryAvg = (vertical.boundaryAvg + horizontal.boundaryAvg) / 2;
+    const interiorAvg = (vertical.interiorAvg + horizontal.interiorAvg) / 2;
+    const axisBalance = Math.min(vertical.peakRatio, horizontal.peakRatio) / Math.max(0.001, Math.max(vertical.peakRatio, horizontal.peakRatio));
+    const gridScore = Math.max(0, boundaryRatio - 1.24) * 12 +
+      peakRatio * 44 +
+      Math.max(0, boundaryAvg - interiorAvg - 1.8) * 0.55 +
+      blocks.flatBlockRatio * 5 +
+      Math.max(0, blocks.blockMeanJump - localTexture * 0.72) * 0.22 +
+      axisBalance * 2;
+    const compressionEvidence = Math.max(0, blocks.flatBlockRatio - 0.24) * 2.4 +
+      Math.max(0, blocks.blockMeanJump / Math.max(1, localTexture) - 0.88) * 0.62 +
+      Math.max(0, 5.5 - interiorAvg) * 0.18;
+    const blockScore = gridScore * Math.min(1.25, compressionEvidence);
+
+    if (blockScore > best.blockScore) {
+      best = {
+        period,
+        blockScore,
+        gridScore,
+        boundaryRatio,
+        boundaryAvg,
+        interiorAvg,
+        peakRatio,
+        axisBalance,
+        flatBlockRatio: blocks.flatBlockRatio,
+        blockMeanJump: blocks.blockMeanJump,
+        blockStd: blocks.blockStd,
+        localTexture,
+      };
+    }
+  }
+
+  const compressionRisk = best.blockScore > 18 &&
+    best.peakRatio > 0.1 &&
+    best.boundaryRatio > 1.42 &&
+    best.axisBalance > 0.28 &&
+    (
+      best.flatBlockRatio > 0.28 ||
+      best.blockMeanJump > best.localTexture * 0.9 ||
+      best.interiorAvg < 4.8
+    );
+
+  return {
+    ...best,
+    compressionRisk,
+  };
+}
+
+function measureCompressionGridAxisCore(data, width, height, period, horizontal, sampleStep) {
+  const cross = horizontal ? height : width;
+  const length = horizontal ? width : height;
+  const crossStep = Math.max(sampleStep, Math.round(cross / 150));
+  let boundaryTotal = 0;
+  let interiorTotal = 0;
+  let peaks = 0;
+  let count = 0;
+
+  for (let line = period; line < length - period; line += period) {
+    for (let crossPos = 1; crossPos < cross - 1; crossPos += crossStep) {
+      const ax = horizontal ? line : crossPos;
+      const ay = horizontal ? crossPos : line;
+      const bx = horizontal ? line - 1 : crossPos;
+      const by = horizontal ? crossPos : line - 1;
+      const in1x = horizontal ? Math.min(width - 1, line + 1) : crossPos;
+      const in1y = horizontal ? crossPos : Math.min(height - 1, line + 1);
+      const in2x = horizontal ? Math.min(width - 1, line + 2) : crossPos;
+      const in2y = horizontal ? crossPos : Math.min(height - 1, line + 2);
+      const in3x = horizontal ? Math.max(0, line - 2) : crossPos;
+      const in3y = horizontal ? crossPos : Math.max(0, line - 2);
+      const in4x = horizontal ? Math.max(0, line - 3) : crossPos;
+      const in4y = horizontal ? crossPos : Math.max(0, line - 3);
+      const boundary = Math.abs(pixelLuminance(data, width, ax, ay) - pixelLuminance(data, width, bx, by));
+      const interior = (
+        Math.abs(pixelLuminance(data, width, in2x, in2y) - pixelLuminance(data, width, in1x, in1y)) +
+        Math.abs(pixelLuminance(data, width, in3x, in3y) - pixelLuminance(data, width, in4x, in4y))
+      ) / 2;
+
+      boundaryTotal += boundary;
+      interiorTotal += interior;
+      count += 1;
+      if (boundary > Math.max(4.8, interior * 1.8 + 1.8)) peaks += 1;
+    }
+  }
+
+  const boundaryAvg = boundaryTotal / Math.max(1, count);
+  const interiorAvg = interiorTotal / Math.max(1, count);
+  return {
+    boundaryAvg,
+    interiorAvg,
+    boundaryRatio: boundaryAvg / Math.max(1, interiorAvg),
+    peakRatio: peaks / Math.max(1, count),
+  };
+}
+
+function measureCompressionBlocksCore(data, width, height, period, localTexture) {
+  const blockStep = Math.max(1, Math.round(period / 4));
+  let flatBlocks = 0;
+  let blocks = 0;
+  let jumpTotal = 0;
+  let jumpCount = 0;
+  let stdTotal = 0;
+
+  for (let y = 0; y < height - period; y += period) {
+    for (let x = 0; x < width - period; x += period) {
+      const block = compressionBlockMeanCore(data, width, x, y, period, blockStep);
+      stdTotal += block.std;
+      blocks += 1;
+      if (block.std < Math.max(3.2, localTexture * 0.58)) flatBlocks += 1;
+
+      if (x + period < width - period) {
+        const right = compressionBlockMeanCore(data, width, x + period, y, period, blockStep);
+        jumpTotal += Math.abs(block.mean - right.mean);
+        jumpCount += 1;
+      }
+      if (y + period < height - period) {
+        const bottom = compressionBlockMeanCore(data, width, x, y + period, period, blockStep);
+        jumpTotal += Math.abs(block.mean - bottom.mean);
+        jumpCount += 1;
+      }
+    }
+  }
+
+  return {
+    flatBlockRatio: flatBlocks / Math.max(1, blocks),
+    blockMeanJump: jumpTotal / Math.max(1, jumpCount),
+    blockStd: stdTotal / Math.max(1, blocks),
+  };
+}
+
+function compressionBlockMeanCore(data, width, x, y, period, blockStep) {
+  let total = 0;
+  let totalSquare = 0;
+  let count = 0;
+  const start = Math.max(1, Math.round(period * 0.22));
+  const end = Math.max(start + 1, Math.round(period * 0.78));
+
+  for (let by = start; by < end; by += blockStep) {
+    for (let bx = start; bx < end; bx += blockStep) {
+      const luminance = pixelLuminance(data, width, x + bx, y + by);
+      total += luminance;
+      totalSquare += luminance * luminance;
+      count += 1;
+    }
+  }
+
+  const mean = total / Math.max(1, count);
+  const variance = Math.max(0, totalSquare / Math.max(1, count) - mean * mean);
+  return {
+    mean,
+    std: Math.sqrt(variance),
   };
 }
 

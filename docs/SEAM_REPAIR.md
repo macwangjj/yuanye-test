@@ -227,6 +227,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `posterizationScore` and `posterizationToneBinRatio`; history downloads require the current posterization gate.
 - Tests cover smooth tonal shading that must pass and posterized 12-level shading that must fail.
 
+## 0.7.40 Compression Block Artifact Gate
+
+- The quality gate now checks for repeated square compression blocks that can look acceptable in a single preview but print as dirty tiled patches.
+- The detector scans multiple candidate periods and requires both a repeated vertical/horizontal block grid and block-level evidence: unusually flat block interiors, color jumps between neighboring blocks, or very low intra-block texture.
+- The issue is reported as `压缩块噪点，不可修复` and routed to regeneration rather than blur/deblock repair, because smoothing compression blocks can destroy textile line detail and create a softer but still unprintable file.
+- Certification metadata stores `compressionArtifactScore` and `compressionArtifactPeriod`; history downloads require the current compression-artifact gate.
+- Tests cover clean printable texture that must pass and synthetic macro-block compression artifacts that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

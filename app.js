@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.39-test";
+const clientVersion = "0.7.40-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -515,6 +515,7 @@ function recordHasCertifiedDownload(record) {
     typeof gate.seamDetailLossScore === "number" &&
     typeof gate.upscaleArtifactScore === "number" &&
     typeof gate.posterizationScore === "number" &&
+    typeof gate.compressionArtifactScore === "number" &&
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
@@ -602,6 +603,8 @@ function buildPrintCertification(task, actionType = "generate") {
       upscaleFlatPairRatio: typeof check.upscaleArtifact?.flatPairRatio === "number" ? check.upscaleArtifact.flatPairRatio : null,
       posterizationScore: typeof check.posterization?.posterizationScore === "number" ? check.posterization.posterizationScore : null,
       posterizationToneBinRatio: typeof check.posterization?.toneBinRatio === "number" ? check.posterization.toneBinRatio : null,
+      compressionArtifactScore: typeof check.compressionArtifact?.blockScore === "number" ? check.compressionArtifact.blockScore : null,
+      compressionArtifactPeriod: typeof check.compressionArtifact?.period === "number" ? check.compressionArtifact.period : null,
       richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
       activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
       layoutBalanceScore: typeof check.layoutBalance?.balanceScore === "number" ? check.layoutBalance.balanceScore : null,
@@ -1680,6 +1683,7 @@ function seamCheckSummary(check) {
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     `放大 ${Number(check.upscaleArtifact?.artifactScore || 0).toFixed(2)}`,
     `色阶 ${Number(check.posterization?.posterizationScore || 0).toFixed(2)}`,
+    `压缩 ${Number(check.compressionArtifact?.blockScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     `密度 ${(Number(check.textureDensity?.fineDetailRatio || 0) * 100).toFixed(0)}%`,
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
@@ -1708,6 +1712,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("镜像轴痕明显，可修复")) return "镜像轴痕明显，可修复";
   if (check.issues?.includes("低清放大痕迹，可增强")) return "低清放大痕迹，可增强";
   if (check.issues?.includes("色阶断层，可增强")) return "色阶断层，可增强";
+  if (check.issues?.includes("压缩块噪点，不可修复")) return "压缩块噪点，不可修复";
   if (check.issues?.includes("印花细节密度不足，可增强")) return "印花细节密度不足，可增强";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
@@ -2209,6 +2214,7 @@ function measureSeamQuality(ctx, width, height) {
   const clarity = measurePrintClarity(data, width, height);
   const upscaleArtifact = measureUpscaleArtifact(data, width, height);
   const posterization = measurePosterizationArtifact(data, width, height);
+  const compressionArtifact = measureCompressionArtifact(data, width, height);
   const richness = measurePrintRichness(data, width, height);
   const textureDensity = measurePrintTextureDensity(data, width, height);
   const layoutBalance = measurePatternBalance(data, width, height);
@@ -2273,6 +2279,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && clarity.blurRisk) issues.push("成品清晰度不足，可增强");
   if (!issues.length && upscaleArtifact.upscaleArtifactRisk) issues.push("低清放大痕迹，可增强");
   if (!issues.length && posterization.posterizationRisk) issues.push("色阶断层，可增强");
+  if (!issues.length && compressionArtifact.compressionRisk) issues.push("压缩块噪点，不可修复");
   if (!issues.length && textureDensity.lowTextureDensityRisk) issues.push("印花细节密度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
@@ -2312,6 +2319,7 @@ function measureSeamQuality(ctx, width, height) {
     !richness.lowInformationRisk &&
     !upscaleArtifact.upscaleArtifactRisk &&
     !posterization.posterizationRisk &&
+    !compressionArtifact.compressionRisk &&
     !textureDensity.lowTextureDensityRisk &&
     !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
@@ -2352,6 +2360,7 @@ function measureSeamQuality(ctx, width, height) {
     clarity,
     upscaleArtifact,
     posterization,
+    compressionArtifact,
     richness,
     textureDensity,
     layoutBalance,
@@ -3479,6 +3488,198 @@ function measurePosterizationArtifact(data, width, height) {
     detailScore,
     gradientScore,
     posterizationRisk,
+  };
+}
+
+function measureCompressionArtifact(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 420));
+  const periods = [4, 6, 8, 10, 12, 16, 20, 24].filter((period) => period < Math.min(width, height) / 3);
+  let best = {
+    period: 0,
+    blockScore: 0,
+    gridScore: 0,
+    boundaryRatio: 0,
+    boundaryAvg: 0,
+    interiorAvg: 0,
+    peakRatio: 0,
+    axisBalance: 0,
+    flatBlockRatio: 0,
+    blockMeanJump: 0,
+    blockStd: 0,
+    localTexture: 0,
+  };
+  let detailTotal = 0;
+  let gradientTotal = 0;
+  let textureCount = 0;
+  const textureStep = Math.max(1, Math.round(Math.max(width, height) / 180));
+
+  for (let y = textureStep; y < height - textureStep; y += textureStep) {
+    for (let x = textureStep; x < width - textureStep; x += textureStep) {
+      const detail = pixelDetailAt(data, width, height, x, y);
+      detailTotal += detail.detail;
+      gradientTotal += detail.gradient;
+      textureCount += 1;
+    }
+  }
+
+  const localTexture = (detailTotal * 0.68 + gradientTotal * 0.32) / Math.max(1, textureCount);
+
+  for (const period of periods) {
+    const vertical = measureCompressionGridAxis(data, width, height, period, false, sampleStep);
+    const horizontal = measureCompressionGridAxis(data, width, height, period, true, sampleStep);
+    const blocks = measureCompressionBlocks(data, width, height, period, localTexture);
+    const boundaryRatio = (vertical.boundaryRatio + horizontal.boundaryRatio) / 2;
+    const peakRatio = (vertical.peakRatio + horizontal.peakRatio) / 2;
+    const boundaryAvg = (vertical.boundaryAvg + horizontal.boundaryAvg) / 2;
+    const interiorAvg = (vertical.interiorAvg + horizontal.interiorAvg) / 2;
+    const axisBalance = Math.min(vertical.peakRatio, horizontal.peakRatio) / Math.max(0.001, Math.max(vertical.peakRatio, horizontal.peakRatio));
+    const gridScore = Math.max(0, boundaryRatio - 1.24) * 12 +
+      peakRatio * 44 +
+      Math.max(0, boundaryAvg - interiorAvg - 1.8) * 0.55 +
+      blocks.flatBlockRatio * 5 +
+      Math.max(0, blocks.blockMeanJump - localTexture * 0.72) * 0.22 +
+      axisBalance * 2;
+    const compressionEvidence = Math.max(0, blocks.flatBlockRatio - 0.24) * 2.4 +
+      Math.max(0, blocks.blockMeanJump / Math.max(1, localTexture) - 0.88) * 0.62 +
+      Math.max(0, 5.5 - interiorAvg) * 0.18;
+    const blockScore = gridScore * Math.min(1.25, compressionEvidence);
+
+    if (blockScore > best.blockScore) {
+      best = {
+        period,
+        blockScore,
+        gridScore,
+        boundaryRatio,
+        boundaryAvg,
+        interiorAvg,
+        peakRatio,
+        axisBalance,
+        flatBlockRatio: blocks.flatBlockRatio,
+        blockMeanJump: blocks.blockMeanJump,
+        blockStd: blocks.blockStd,
+        localTexture,
+      };
+    }
+  }
+
+  const compressionRisk = best.blockScore > 18 &&
+    best.peakRatio > 0.1 &&
+    best.boundaryRatio > 1.42 &&
+    best.axisBalance > 0.28 &&
+    (
+      best.flatBlockRatio > 0.28 ||
+      best.blockMeanJump > best.localTexture * 0.9 ||
+      best.interiorAvg < 4.8
+    );
+
+  return {
+    ...best,
+    compressionRisk,
+  };
+}
+
+function measureCompressionGridAxis(data, width, height, period, horizontal, sampleStep) {
+  const cross = horizontal ? height : width;
+  const length = horizontal ? width : height;
+  const crossStep = Math.max(sampleStep, Math.round(cross / 150));
+  let boundaryTotal = 0;
+  let interiorTotal = 0;
+  let peaks = 0;
+  let count = 0;
+
+  for (let line = period; line < length - period; line += period) {
+    for (let crossPos = 1; crossPos < cross - 1; crossPos += crossStep) {
+      const ax = horizontal ? line : crossPos;
+      const ay = horizontal ? crossPos : line;
+      const bx = horizontal ? line - 1 : crossPos;
+      const by = horizontal ? crossPos : line - 1;
+      const in1x = horizontal ? Math.min(width - 1, line + 1) : crossPos;
+      const in1y = horizontal ? crossPos : Math.min(height - 1, line + 1);
+      const in2x = horizontal ? Math.min(width - 1, line + 2) : crossPos;
+      const in2y = horizontal ? crossPos : Math.min(height - 1, line + 2);
+      const in3x = horizontal ? Math.max(0, line - 2) : crossPos;
+      const in3y = horizontal ? crossPos : Math.max(0, line - 2);
+      const in4x = horizontal ? Math.max(0, line - 3) : crossPos;
+      const in4y = horizontal ? crossPos : Math.max(0, line - 3);
+      const boundary = Math.abs(pixelLuminance(data, width, ax, ay) - pixelLuminance(data, width, bx, by));
+      const interior = (
+        Math.abs(pixelLuminance(data, width, in2x, in2y) - pixelLuminance(data, width, in1x, in1y)) +
+        Math.abs(pixelLuminance(data, width, in3x, in3y) - pixelLuminance(data, width, in4x, in4y))
+      ) / 2;
+
+      boundaryTotal += boundary;
+      interiorTotal += interior;
+      count += 1;
+      if (boundary > Math.max(4.8, interior * 1.8 + 1.8)) peaks += 1;
+    }
+  }
+
+  const boundaryAvg = boundaryTotal / Math.max(1, count);
+  const interiorAvg = interiorTotal / Math.max(1, count);
+  return {
+    boundaryAvg,
+    interiorAvg,
+    boundaryRatio: boundaryAvg / Math.max(1, interiorAvg),
+    peakRatio: peaks / Math.max(1, count),
+  };
+}
+
+function measureCompressionBlocks(data, width, height, period, localTexture) {
+  const blockStep = Math.max(1, Math.round(period / 4));
+  let flatBlocks = 0;
+  let blocks = 0;
+  let jumpTotal = 0;
+  let jumpCount = 0;
+  let stdTotal = 0;
+
+  for (let y = 0; y < height - period; y += period) {
+    for (let x = 0; x < width - period; x += period) {
+      const block = compressionBlockMean(data, width, x, y, period, blockStep);
+      stdTotal += block.std;
+      blocks += 1;
+      if (block.std < Math.max(3.2, localTexture * 0.58)) flatBlocks += 1;
+
+      if (x + period < width - period) {
+        const right = compressionBlockMean(data, width, x + period, y, period, blockStep);
+        jumpTotal += Math.abs(block.mean - right.mean);
+        jumpCount += 1;
+      }
+      if (y + period < height - period) {
+        const bottom = compressionBlockMean(data, width, x, y + period, period, blockStep);
+        jumpTotal += Math.abs(block.mean - bottom.mean);
+        jumpCount += 1;
+      }
+    }
+  }
+
+  return {
+    flatBlockRatio: flatBlocks / Math.max(1, blocks),
+    blockMeanJump: jumpTotal / Math.max(1, jumpCount),
+    blockStd: stdTotal / Math.max(1, blocks),
+  };
+}
+
+function compressionBlockMean(data, width, x, y, period, blockStep) {
+  let total = 0;
+  let totalSquare = 0;
+  let count = 0;
+  const start = Math.max(1, Math.round(period * 0.22));
+  const end = Math.max(start + 1, Math.round(period * 0.78));
+
+  for (let by = start; by < end; by += blockStep) {
+    for (let bx = start; bx < end; bx += blockStep) {
+      const luminance = pixelLuminance(data, width, x + bx, y + by);
+      total += luminance;
+      totalSquare += luminance * luminance;
+      count += 1;
+    }
+  }
+
+  const mean = total / Math.max(1, count);
+  const variance = Math.max(0, totalSquare / Math.max(1, count) - mean * mean);
+  return {
+    mean,
+    std: Math.sqrt(variance),
   };
 }
 
