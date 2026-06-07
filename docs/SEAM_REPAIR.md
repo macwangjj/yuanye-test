@@ -362,6 +362,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The prompt now explicitly tells the image model to redraw guide-line intersections naturally, removing grid hard points without changing the protected textile field.
 - This keeps the external commercial gate unchanged: repaired candidates still need to pass the full seam, print-size, DPI, clarity, and certification checks before download.
 
+## 0.7.60 Background Generation Jobs
+
+- Browser requests now create a short-lived background image generation job instead of waiting on one long `/api/generate` response.
+- The workbench polls the job until it succeeds or fails, so slow AI image edits and AI Offset seam inpainting are less likely to be killed by browser, tunnel, or free-hosting response timeouts.
+- Normal generation and masked AI seam repair both use the same job path, while the older direct `/api/generate` route stays available as a compatibility fallback.
+- This improves deployed-site reliability for long seam-repair attempts without weakening the four-way repeat or print-clarity gates.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

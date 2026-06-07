@@ -30,8 +30,11 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.59-test";
-const generateTimeoutMs = 8 * 60 * 1000;
+const clientVersion = "0.7.60-test";
+const generateJobCreateTimeoutMs = 30000;
+const generateJobPollTimeoutMs = 30000;
+const generateJobMaxWaitMs = 20 * 60 * 1000;
+const generateJobPollIntervalMs = 2500;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
 let activeHistoryGroupKey = "";
@@ -128,6 +131,49 @@ function friendlyRequestError(error) {
   }
 
   return message;
+}
+
+async function requestImageGeneration(payload, options = {}) {
+  const createPayload = await fetchJsonWithRetry("/api/generate-jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }, {
+    retries: 1,
+    timeoutMs: generateJobCreateTimeoutMs,
+  });
+
+  const jobId = createPayload.job?.id;
+  if (!jobId) {
+    throw new Error("生成任务创建失败：服务器没有返回任务编号。");
+  }
+
+  const startedAt = Date.now();
+  let pollCount = 0;
+  while (Date.now() - startedAt < generateJobMaxWaitMs) {
+    pollCount += 1;
+    await delay(Math.min(generateJobPollIntervalMs + pollCount * 160, 5000));
+    const pollPayload = await fetchJsonWithRetry(`/api/generate-jobs/${encodeURIComponent(jobId)}`, {
+      method: "GET",
+    }, {
+      retries: 2,
+      timeoutMs: generateJobPollTimeoutMs,
+    });
+    const job = pollPayload.job;
+    if (options.onPoll) options.onPoll(job, pollCount);
+
+    if (job?.status === "succeeded") {
+      if (!job.result?.image?.dataUrl) {
+        throw new Error("生成任务已完成，但没有返回图片。");
+      }
+      return job.result;
+    }
+    if (job?.status === "failed") {
+      throw new Error(job.error || "生成任务失败。");
+    }
+  }
+
+  throw new Error("生成任务等待超过 20 分钟。后台可能仍在处理，请稍后刷新历史记录或重新生成。");
 }
 
 function fileToDataUrl(file) {
@@ -1230,21 +1276,21 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
 }
 
 async function requestGeneratedImage(task, previousCheck = null, attempt = 1) {
-  return await fetchJsonWithRetry("/api/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image: {
-        name: task.file.name,
-        type: task.file.type,
-        dataUrl: task.dataUrl,
-      },
-      prompt: task.generationMode === "fission" ? buildFissionPrompt(task, previousCheck, attempt) : buildPrompt(previousCheck, attempt),
-      size: els.size.value,
-    }),
+  return await requestImageGeneration({
+    image: {
+      name: task.file.name,
+      type: task.file.type,
+      dataUrl: task.dataUrl,
+    },
+    prompt: task.generationMode === "fission" ? buildFissionPrompt(task, previousCheck, attempt) : buildPrompt(previousCheck, attempt),
+    size: els.size.value,
   }, {
-    retries: 1,
-    timeoutMs: generateTimeoutMs,
+    onPoll: (job) => {
+      if (job?.status === "running") {
+        const retryText = attempt === 1 ? "" : ` ${attempt - 1}/${maxAutoRegenerations}`;
+        setTaskStatus(task, "生成中", `图片接口正在生成${retryText}，请保持页面打开。`, 44);
+      }
+    },
   });
 }
 
@@ -1586,26 +1632,25 @@ async function aiOffsetRepairTask(task, previousCheck) {
   const repairSourceUrl = task.resultDataUrl || task.resultJpgUrl;
   const offsetDataUrl = await makeOffsetDataUrl(repairSourceUrl, { format: "png" });
   const maskDataUrl = await makeOffsetRepairMaskDataUrl(offsetDataUrl);
-  const payload = await fetchJsonWithRetry("/api/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image: {
-        name: `${task.patternCode || "YUANYE"}-offset-seam-repair.png`,
-        type: "image/png",
-        dataUrl: offsetDataUrl,
-      },
-      mask: {
-        name: `${task.patternCode || "YUANYE"}-offset-seam-mask.png`,
-        type: "image/png",
-        dataUrl: maskDataUrl,
-      },
-      prompt: buildOffsetRepairPrompt(previousCheck),
-      size: els.size.value,
-    }),
+  const payload = await requestImageGeneration({
+    image: {
+      name: `${task.patternCode || "YUANYE"}-offset-seam-repair.png`,
+      type: "image/png",
+      dataUrl: offsetDataUrl,
+    },
+    mask: {
+      name: `${task.patternCode || "YUANYE"}-offset-seam-mask.png`,
+      type: "image/png",
+      dataUrl: maskDataUrl,
+    },
+    prompt: buildOffsetRepairPrompt(previousCheck),
+    size: els.size.value,
   }, {
-    retries: 1,
-    timeoutMs: generateTimeoutMs,
+    onPoll: (job) => {
+      if (job?.status === "running") {
+        setTaskStatus(task, "生成中", "AI 正在重绘接缝过渡，请保持页面打开。", 94);
+      }
+    },
   });
 
   const restoredDataUrl = await makeOffsetDataUrl(payload.image.dataUrl, { reverse: true, format: "png" });

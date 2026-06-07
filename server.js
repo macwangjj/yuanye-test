@@ -19,13 +19,15 @@ const imageModel = (process.env.OPENAI_IMAGE_MODEL || "gpt-image-2").trim();
 const imageModelCandidates = unique([imageModel, "gpt-image-2", "gpt-image-1.5", "gpt-image-1"]);
 const apiBaseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
 const imageEditUrl = `${apiBaseUrl}/images/edits`;
-const appVersion = "0.7.59-test";
+const appVersion = "0.7.60-test";
 const appPassword = (process.env.YUANYE_PASSWORD || "").trim();
 const sessionSecret = (process.env.YUANYE_SESSION_SECRET || apiKey || appPassword || randomBytes(32).toString("hex")).trim();
 const authEnabled = appPassword.length > 0;
 const execFileAsync = promisify(execFile);
 const imageRequestTimeoutMs = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS || 300000);
 const generateRouteTimeoutMs = Number(process.env.YUANYE_GENERATE_TIMEOUT_MS || 460000);
+const generationJobTtlMs = Number(process.env.YUANYE_GENERATION_JOB_TTL_MS || 30 * 60 * 1000);
+const generationJobs = new Map();
 
 function loadDotEnv() {
   const envPath = join(root, ".env");
@@ -291,6 +293,61 @@ async function generateImage(payload) {
   }
 
   throw lastError || new Error("图片生成失败。");
+}
+
+function cleanupGenerationJobs() {
+  const now = Date.now();
+  for (const [id, job] of generationJobs.entries()) {
+    if (["succeeded", "failed"].includes(job.status) && now - job.updatedAt > generationJobTtlMs) {
+      generationJobs.delete(id);
+    }
+  }
+}
+
+function publicGenerationJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    createdAt: new Date(job.createdAt).toISOString(),
+    updatedAt: new Date(job.updatedAt).toISOString(),
+    result: job.status === "succeeded" ? job.result : undefined,
+    error: job.status === "failed" ? job.error : undefined,
+  };
+}
+
+function createGenerationJob(payload) {
+  cleanupGenerationJobs();
+  const now = Date.now();
+  const job = {
+    id: randomBytes(12).toString("hex"),
+    status: "queued",
+    createdAt: now,
+    updatedAt: now,
+    result: null,
+    error: "",
+  };
+  generationJobs.set(job.id, job);
+  runGenerationJob(job.id, payload);
+  return job;
+}
+
+async function runGenerationJob(id, payload) {
+  const job = generationJobs.get(id);
+  if (!job) return;
+
+  job.status = "running";
+  job.updatedAt = Date.now();
+  try {
+    const image = await generateImage(payload);
+    job.status = "succeeded";
+    job.result = { image };
+  } catch (error) {
+    job.status = "failed";
+    job.error = error.message || "图片生成失败。";
+    console.error(`Generation job ${id} failed:`, job.error);
+  } finally {
+    job.updatedAt = Date.now();
+  }
 }
 
 function buildImageAttempts({ model, size, hasMask = false, maimaiGateway = false }) {
@@ -783,6 +840,26 @@ const server = createServer(async (request, response) => {
         baseUrl: apiBaseUrl,
         auth: authEnabled,
       });
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/generate-jobs") {
+      const body = await readBody(request);
+      const payload = JSON.parse(body);
+      const job = createGenerationJob(payload);
+      sendJson(response, 202, { job: publicGenerationJob(job) });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/generate-jobs/")) {
+      cleanupGenerationJobs();
+      const id = decodeURIComponent(url.pathname.replace("/api/generate-jobs/", ""));
+      const job = generationJobs.get(id);
+      if (!job) {
+        sendJson(response, 404, { error: "生成任务不存在或已过期。" });
+        return;
+      }
+      sendJson(response, 200, { job: publicGenerationJob(job) });
       return;
     }
 
