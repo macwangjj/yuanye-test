@@ -179,7 +179,15 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - This catches square or landscape model outputs being forced into the portrait textile layout; those files may tile mathematically, but the motifs become visibly distorted and are not commercial-print ready.
 - This issue is routed to regeneration rather than seam repair, because local seam blending cannot recover the correct motif proportion.
 - Certification metadata stores `aspectWarpRatio` and `aspectStretchPercent`; current and history downloads require the aspect-warp gate.
-- Tests cover near-target portrait outputs that must pass and square/landscape outputs that must fail.
+- Tests originally covered near-target portrait outputs that must pass and mismatched outputs that must not be hard-stretched; 0.7.34 adds a safe square-tile rectification path before final rejection.
+
+## 0.7.34 Periodic Aspect Rectification
+
+- When the upstream image API returns a square tile despite the portrait size request, the exporter now searches for a low-distortion periodic grid before rejecting it.
+- A square seamless source can be exported as a `2 x 3` periodic grid on the `4961 x 7559 px` canvas, keeping motif proportions within the same 8% stretch limit instead of pulling the whole image tall.
+- The existing seam and internal-line gates still run after export. If the square source was not genuinely seamless, the repeated cell boundaries remain visible and the candidate fails certification.
+- Certification metadata stores `exportMode`, `tileColumns`, and `tileRows`, so history records show whether a file came from direct portrait export or periodic rectification.
+- Tests cover direct portrait export, square-to-`2 x 3` periodic rectification, and landscape outputs that remain too distorted to certify.
 
 ## 0.7.13 Success-Rate Changes
 

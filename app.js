@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.33-test";
+const clientVersion = "0.7.34-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -552,6 +552,9 @@ function buildPrintCertification(task, actionType = "generate") {
       sourceWidthPx: check.aspectWarp?.sourceWidth ?? null,
       sourceHeightPx: check.aspectWarp?.sourceHeight ?? null,
       sourceAspect: typeof check.aspectWarp?.sourceAspect === "number" ? check.aspectWarp.sourceAspect : null,
+      exportMode: check.aspectWarp?.mode || "",
+      tileColumns: check.aspectWarp?.columns || 1,
+      tileRows: check.aspectWarp?.rows || 1,
       aspectWarpPassed: check.aspectWarp?.passed === true,
     },
     gate: {
@@ -1690,10 +1693,11 @@ function makeJpg(dataUrl, options = {}) {
 
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
+        const aspectWarp = measureAspectWarp(image.width, image.height, canvas.width, canvas.height);
         if (options.exportMetrics) {
-          options.exportMetrics.aspectWarp = measureAspectWarp(image.width, image.height, canvas.width, canvas.height);
+          options.exportMetrics.aspectWarp = aspectWarp;
         }
-        drawTileToTarget(ctx, image, canvas.width, canvas.height);
+        drawTileToTarget(ctx, image, canvas.width, canvas.height, aspectWarp);
         if (options.repair !== false) {
           repairSeams(ctx, canvas.width, canvas.height, options.repairOptions || {});
         }
@@ -2029,8 +2033,23 @@ function printClarityStrength(image, targetWidth, targetHeight, options = {}) {
   return Math.min(0.52, Math.max(base, requested));
 }
 
-function drawTileToTarget(ctx, image, targetWidth, targetHeight) {
-  ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+function drawTileToTarget(ctx, image, targetWidth, targetHeight, aspectWarp = null) {
+  if (aspectWarp?.mode !== "periodic-grid") {
+    ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+    return;
+  }
+
+  const columns = Math.max(1, Math.round(aspectWarp.columns || 1));
+  const rows = Math.max(1, Math.round(aspectWarp.rows || 1));
+  for (let row = 0; row < rows; row += 1) {
+    const y0 = Math.round((row * targetHeight) / rows);
+    const y1 = Math.round(((row + 1) * targetHeight) / rows);
+    for (let column = 0; column < columns; column += 1) {
+      const x0 = Math.round((column * targetWidth) / columns);
+      const x1 = Math.round(((column + 1) * targetWidth) / columns);
+      ctx.drawImage(image, x0, y0, x1 - x0, y1 - y0);
+    }
+  }
 }
 
 function measureSeams(ctx, width, height) {
@@ -4059,13 +4078,8 @@ function measureAspectWarp(sourceWidth, sourceHeight, targetWidth = 4961, target
   const valid = safeSourceWidth > 0 && safeSourceHeight > 0 && safeTargetWidth > 0 && safeTargetHeight > 0;
   const sourceAspect = valid ? safeSourceWidth / safeSourceHeight : 0;
   const targetAspect = valid ? safeTargetWidth / safeTargetHeight : 0;
-  const horizontalScale = valid ? safeTargetWidth / safeSourceWidth : 0;
-  const verticalScale = valid ? safeTargetHeight / safeSourceHeight : 0;
-  const minScale = Math.min(horizontalScale, verticalScale);
-  const maxScale = Math.max(horizontalScale, verticalScale);
-  const warpRatio = valid && minScale > 0 ? maxScale / minScale : Infinity;
-  const stretchPercent = Number.isFinite(warpRatio) ? (warpRatio - 1) * 100 : Infinity;
-  const passed = valid && warpRatio <= 1.08;
+  const directFit = measureAspectWarpFit(safeSourceWidth, safeSourceHeight, safeTargetWidth, safeTargetHeight, 1, 1, "direct-stretch");
+  const fit = directFit.passed ? directFit : bestPeriodicAspectFit(safeSourceWidth, safeSourceHeight, safeTargetWidth, safeTargetHeight, directFit);
 
   return {
     sourceWidth: safeSourceWidth,
@@ -4074,12 +4088,62 @@ function measureAspectWarp(sourceWidth, sourceHeight, targetWidth = 4961, target
     targetHeight: safeTargetHeight,
     sourceAspect,
     targetAspect,
+    horizontalScale: fit.horizontalScale,
+    verticalScale: fit.verticalScale,
+    warpRatio: fit.warpRatio,
+    stretchPercent: fit.stretchPercent,
+    mode: fit.mode,
+    columns: fit.columns,
+    rows: fit.rows,
+    cellAspect: fit.cellAspect,
+    periodicRectified: fit.mode === "periodic-grid",
+    passed: valid && fit.passed,
+  };
+}
+
+function measureAspectWarpFit(sourceWidth, sourceHeight, targetWidth, targetHeight, columns, rows, mode) {
+  const valid = sourceWidth > 0 && sourceHeight > 0 && targetWidth > 0 && targetHeight > 0 && columns > 0 && rows > 0;
+  const cellWidth = valid ? targetWidth / columns : 0;
+  const cellHeight = valid ? targetHeight / rows : 0;
+  const horizontalScale = valid ? cellWidth / sourceWidth : 0;
+  const verticalScale = valid ? cellHeight / sourceHeight : 0;
+  const minScale = Math.min(horizontalScale, verticalScale);
+  const maxScale = Math.max(horizontalScale, verticalScale);
+  const warpRatio = valid && minScale > 0 ? maxScale / minScale : Infinity;
+  const stretchPercent = Number.isFinite(warpRatio) ? (warpRatio - 1) * 100 : Infinity;
+
+  return {
+    mode,
+    columns,
+    rows,
+    cellAspect: valid ? cellWidth / cellHeight : 0,
     horizontalScale,
     verticalScale,
     warpRatio,
     stretchPercent,
-    passed,
+    passed: valid && warpRatio <= 1.08,
   };
+}
+
+function bestPeriodicAspectFit(sourceWidth, sourceHeight, targetWidth, targetHeight, directFit) {
+  let best = directFit;
+  const maxColumns = 3;
+  const maxRows = 4;
+  for (let rows = 1; rows <= maxRows; rows += 1) {
+    for (let columns = 1; columns <= maxColumns; columns += 1) {
+      if (columns === 1 && rows === 1) continue;
+      const fit = measureAspectWarpFit(sourceWidth, sourceHeight, targetWidth, targetHeight, columns, rows, "periodic-grid");
+      const fitTiles = columns * rows;
+      const bestTiles = best.columns * best.rows;
+      if (
+        fit.warpRatio < best.warpRatio - 0.002 ||
+        (Math.abs(fit.warpRatio - best.warpRatio) <= 0.002 && fitTiles < bestTiles)
+      ) {
+        best = fit;
+      }
+    }
+  }
+  return best;
 }
 
 function readJpegDpi(dataUrl) {

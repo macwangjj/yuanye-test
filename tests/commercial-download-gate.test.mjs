@@ -68,6 +68,7 @@ test("history certification rejects stale or partial metadata", () => {
         textureDensityScore: 8.5,
         outerFrameScore: 0.8,
         aspectWarpRatio: 1.02,
+        aspectStretchPercent: 2,
       },
     },
   };
@@ -105,6 +106,9 @@ test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /preTiledPreviewScore: typeof check\.preTiledPreview\?\.score === "number" \? check\.preTiledPreview\.score : null/, "certification should retain pre-tiled preview score");
   assert.match(appSource, /textureDensityScore: typeof check\.textureDensity\?\.textureDensityScore === "number" \? check\.textureDensity\.textureDensityScore : null/, "certification should retain texture-density score");
   assert.match(appSource, /outerFrameScore: typeof check\.outerFrame\?\.score === "number" \? check\.outerFrame\.score : null/, "certification should retain outer-frame score");
+  assert.match(appSource, /exportMode: check\.aspectWarp\?\.mode \|\| ""/, "certification should retain export mode");
+  assert.match(appSource, /tileColumns: check\.aspectWarp\?\.columns \|\| 1/, "certification should retain periodic grid columns");
+  assert.match(appSource, /tileRows: check\.aspectWarp\?\.rows \|\| 1/, "certification should retain periodic grid rows");
   assert.match(appSource, /aspectWarpPassed: check\.aspectWarp\?\.passed === true/, "certification should retain aspect-warp pass state");
   assert.match(appSource, /aspectWarpRatio: typeof check\.aspectWarp\?\.warpRatio === "number" \? check\.aspectWarp\.warpRatio : null/, "certification should retain aspect-warp ratio");
   assert.match(appSource, /driftScore: Math\.max\(check\.driftHorizontal\?\.score \|\| 0, check\.driftVertical\?\.score \|\| 0\)/, "certification should retain edge-drift score");
