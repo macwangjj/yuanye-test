@@ -110,6 +110,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - `接缝细节发虚，可修复` is routed through the repair chain instead of being treated as a certified handoff.
 - Tests cover sharp seam bands that must pass and blurred seam bands that must fail.
 
+## 0.7.24 Strict History Certification
+
+- History downloads now require the saved certification object to carry `certified: true`, `fourWayRepeat: true`, `qualityPassed: true`, `printSpecPassed: true`, and a numeric `seamDetailLossScore`.
+- Older records that lack the current seam-detail gate are treated as `未认证下载` instead of being included in commercial ZIP exports.
+- This keeps new safety gates from being bypassed through stale history metadata.
+- Tests cover the stricter history certification contract.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

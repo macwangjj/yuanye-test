@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.23-test";
+const clientVersion = "0.7.24-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -482,7 +482,18 @@ function taskHasCertifiedDownload(task) {
 }
 
 function recordHasCertifiedDownload(record) {
-  return Boolean(record?.imageUrl && record?.qualityPassed === true && record?.seamCheck?.passed !== false && record?.certification?.actual?.printSpecPassed === true);
+  const certification = record?.certification || {};
+  const actual = certification.actual || {};
+  const gate = certification.gate || {};
+  return Boolean(
+    record?.imageUrl &&
+    record?.qualityPassed === true &&
+    certification.certified === true &&
+    actual.printSpecPassed === true &&
+    gate.fourWayRepeat === true &&
+    gate.qualityPassed === true &&
+    typeof gate.seamDetailLossScore === "number"
+  );
 }
 
 function updateTaskDownloadGate(task) {

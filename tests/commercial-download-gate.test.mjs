@@ -26,10 +26,51 @@ test("history and batch downloads only include certified records", () => {
 
   assert.match(selectGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history selection should filter to certified records");
   assert.match(downloadGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history group download should filter to certified records");
-  assert.match(recordCertificationFunction, /certification\?\.actual\?\.printSpecPassed === true/, "history certification must require saved print spec verification");
+  assert.match(recordCertificationFunction, /actual\.printSpecPassed === true/, "history certification must require saved print spec verification");
+  assert.match(recordCertificationFunction, /certification\.certified === true/, "history certification must require an explicit certified handoff flag");
+  assert.match(recordCertificationFunction, /gate\.fourWayRepeat === true/, "history certification must require saved four-way-repeat approval");
+  assert.match(recordCertificationFunction, /gate\.qualityPassed === true/, "history certification must require saved quality approval");
+  assert.match(recordCertificationFunction, /typeof gate\.seamDetailLossScore === "number"/, "history certification must require the seam detail-loss gate");
   assert.match(selectedZipFunction, /certified !== false/, "batch zip should reject explicitly uncertified entries");
   assert.match(historyTemplateFunction, /data-certified="\$\{certified\}"/, "history checkbox should carry certification state");
   assert.match(historyTemplateFunction, /disabled/, "uncertified history records should render a disabled download control");
+});
+
+test("history certification rejects stale or partial metadata", () => {
+  const recordHasCertifiedDownload = compileFunction(appSource, "recordHasCertifiedDownload");
+  const certifiedRecord = {
+    imageUrl: "/history/current.jpg",
+    qualityPassed: true,
+    certification: {
+      certified: true,
+      actual: { printSpecPassed: true },
+      gate: {
+        fourWayRepeat: true,
+        qualityPassed: true,
+        seamDetailLossScore: 2.4,
+      },
+    },
+  };
+
+  assert.equal(recordHasCertifiedDownload(certifiedRecord), true, "complete current certification should be downloadable");
+  assert.equal(recordHasCertifiedDownload({
+    ...certifiedRecord,
+    certification: {
+      ...certifiedRecord.certification,
+      gate: {
+        fourWayRepeat: true,
+        qualityPassed: true,
+      },
+    },
+  }), false, "records missing the seam detail-loss gate should not be downloadable");
+  assert.equal(recordHasCertifiedDownload({
+    imageUrl: "/history/old.jpg",
+    qualityPassed: true,
+    seamCheck: { passed: true },
+    certification: {
+      actual: { printSpecPassed: true },
+    },
+  }), false, "old records with only print-spec metadata should not be downloadable");
 });
 
 test("saved history records retain print certification metadata", () => {
@@ -54,4 +95,8 @@ function extractFunction(source, name) {
     if (depth === 0) return source.slice(start, index + 1);
   }
   throw new Error(`Unable to extract ${name}`);
+}
+
+function compileFunction(source, name) {
+  return Function(`"use strict"; return (${extractFunction(source, name)});`)();
 }
