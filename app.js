@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.49-test";
+const clientVersion = "0.7.50-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -688,7 +688,7 @@ function collectQualityIssueText(previousCheck = null) {
 }
 
 function isStructuralSeamIssue(issueText = "") {
-  return /横档|竖档|回头没接|四角平铺交汇|平铺预览中心线|平铺边带|细线接缝|接缝过渡不自然|接缝细节发虚|边缘错位漂移|最终JPG边缘硬线/.test(issueText);
+  return /横档|竖档|回头没接|四角平铺交汇|内部接缝线|平铺预览中心线|平铺边带|细线接缝|接缝过渡不自然|接缝细节发虚|边缘错位漂移|最终JPG边缘硬线/.test(issueText);
 }
 
 function buildAttemptStrategyGuidance(attempt = 1, previousCheck = null) {
@@ -783,8 +783,8 @@ function retryGuidanceForIssue(issue) {
   if (text.includes("花型元素叠加")) {
     return "避免贴片重叠：不要把元素堆叠在接缝处遮盖问题，重画自然穿插关系，保证花叶和纹理不互相压糊。";
   }
-  if (text.includes("接缝过渡不自然") || text.includes("平铺预览中心线") || text.includes("平铺边带") || text.includes("接缝细节发虚") || text.includes("细线接缝") || text.includes("轻微色差")) {
-    return "丝滑过渡：接缝区域必须重新生成自然图案细节，不要用模糊、淡化、平均色、纯色带、镜像带或羽化条带遮盖。";
+  if (text.includes("内部接缝线") || text.includes("接缝过渡不自然") || text.includes("平铺预览中心线") || text.includes("平铺边带") || text.includes("接缝细节发虚") || text.includes("细线接缝") || text.includes("轻微色差")) {
+    return "丝滑过渡：接缝或内部导线区域必须重新生成自然图案细节，不要用模糊、淡化、平均色、纯色带、镜像带、网格线或羽化条带遮盖。";
   }
   return "总体重生：重新设计一个真实四方连续的单个循环单元，不要把上一张图裁切、镜像、模糊或简单拼贴。";
 }
@@ -1759,6 +1759,7 @@ function shouldRefineAiSeamRepair(next, previous) {
 
 function taskRepairableVisualIssue(check) {
   return Boolean(check?.issues?.some((issue) => (
+    issue.includes("内部接缝线") ||
     issue.includes("平铺边带") ||
     issue.includes("平铺预览") ||
     issue.includes("细线接缝") ||
@@ -1797,11 +1798,11 @@ function buildOffsetRepairPrompt(previousCheck = null) {
   const issueText = previousCheck?.issues?.length ? previousCheck.issues.join("、") : "中心十字接缝风险";
   return `这张图是一个四方连续印花单元经过 Offset 偏移后的中间修缝图：原本的上下/左右边缘接缝已经被移动到画面中心，形成可能可见的水平和垂直十字接缝。
 
-请重点重绘画面中心十字接缝附近的过渡区域，让 AI 自然生成丝滑衔接，而不是硬拼、镜像、糊边或简单平均颜色。上一轮检测问题：${issueText}。
+请重点重绘画面中心十字接缝附近的过渡区域；如果蒙版还开放了 1/4、1/3、2/3、3/4 附近的细长内部导线带，也要一并自然重绘，让 AI 生成丝滑衔接，而不是硬拼、镜像、糊边、网格线或简单平均颜色。上一轮检测问题：${issueText}。
 
 必须严格执行：
 1. 已提供蒙版：透明和半透明区域是允许重绘的中心十字接缝带，蒙版外侧应尽量保持原图稳定。
-2. 允许在中心水平线和中心垂直线两侧约 20% 宽度内做自然变化、补画、重绘和过渡生成；小幅元素变化可以接受，目标是无缝和自然。
+2. 允许在中心水平线、中心垂直线以及蒙版开放的内部导线带附近做自然变化、补画、重绘和过渡生成；小幅元素变化可以接受，目标是无缝和自然。
 3. 保持外侧四边 10% 区域尽量稳定，因为这些外侧边界已经是连续边界，不能新增白边、黑边、画框或边缘拼接线。
 4. 中心十字修复后，纹理、笔触、花枝、叶片、抽象纹路、明暗层次必须自然穿过中心线；要像原本就连续绘制，而不是后期拼接。
 5. 如果中心线附近有元素断头，可以补出合理的枝叶、花瓣、纹理走向或背景过渡；如果有明暗突变，可以生成自然渐变和局部纹理变化。
@@ -1876,6 +1877,7 @@ function shouldEdgeBlendRepair(check) {
     (check.issues?.some((issue) => (
       issue.includes("横档") ||
       issue.includes("竖档") ||
+      issue.includes("内部接缝线") ||
       issue.includes("接缝过渡") ||
       issue.includes("接缝细节发虚") ||
       issue.includes("细线接缝") ||
@@ -1955,7 +1957,7 @@ function shouldTryCertifiedSeamlessFallback(check) {
   if (/花型信息量不足|花型分布过于集中|疑似平铺预览输出|画框留白|输出比例拉伸|成品规格|低清放大|成品清晰度不足|印花细节密度不足|色阶断层|压缩块噪点|锐化光晕|花型元素叠加/.test(issueText)) {
     return false;
   }
-  if (!/横档|竖档|回头没接|最终JPG边缘硬线|四角平铺交汇|边缘错位漂移|接缝过渡|平铺预览中心线|平铺边带|接缝细节发虚|细线接缝|轻微色差/.test(issueText)) {
+  if (!/横档|竖档|回头没接|最终JPG边缘硬线|四角平铺交汇|边缘错位漂移|接缝过渡|内部接缝线|平铺预览中心线|平铺边带|接缝细节发虚|细线接缝|轻微色差/.test(issueText)) {
     return false;
   }
 
@@ -2303,10 +2305,12 @@ function drawOffsetRepairMask(ctx, width, height) {
   for (let y = 0; y < height; y += 1) {
     const dy = Math.abs(y - centerY);
     const horizontalEdit = seamEditStrength(dy, coreY, featherY);
+    const horizontalGuideEdit = internalGuideLineEditStrength(y, height);
     for (let x = 0; x < width; x += 1) {
       const dx = Math.abs(x - centerX);
       const verticalEdit = seamEditStrength(dx, coreX, featherX);
-      const edit = Math.max(horizontalEdit, verticalEdit);
+      const verticalGuideEdit = internalGuideLineEditStrength(x, width);
+      const edit = Math.max(horizontalEdit, verticalEdit, horizontalGuideEdit, verticalGuideEdit);
       const alpha = Math.round(255 * (1 - edit));
       const index = (y * width + x) * 4;
       data[index] = 255;
@@ -2317,6 +2321,20 @@ function drawOffsetRepairMask(ctx, width, height) {
   }
 
   ctx.putImageData(imageData, 0, 0);
+}
+
+function internalGuideLineEditStrength(position, size) {
+  const guideRatios = [0.25, 1 / 3, 0.5, 2 / 3, 0.75];
+  const core = Math.max(2, size * 0.006);
+  const feather = Math.max(core + 1, size * 0.055);
+  let strength = 0;
+
+  for (const ratio of guideRatios) {
+    const distance = Math.abs(position - size * ratio);
+    strength = Math.max(strength, seamEditStrength(distance, core, feather));
+  }
+
+  return strength * 0.72;
 }
 
 function seamEditStrength(distance, core, feather) {
@@ -2751,7 +2769,51 @@ function measureSeamQuality(ctx, width, height) {
     issues,
     passed,
   };
+  normalizeRepairableSeamIssue(check);
   check.rating = seamRating(check);
+  return check;
+}
+
+function normalizeRepairableSeamIssue(check) {
+  if (!check || check.passed || !Array.isArray(check.issues) || !check.issues.length) return check;
+  const issueText = check.issues.join(" ");
+  if (/花型信息量不足|花型分布过于集中|疑似平铺预览输出|画框留白|输出比例拉伸|成品规格|低清放大|成品清晰度不足|印花细节密度不足|色阶断层|压缩块噪点|锐化光晕|花型元素叠加|最终JPG边缘硬线/.test(issueText)) {
+    return check;
+  }
+
+  const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
+  const peakRatio = Math.max(check.peakRatioH || 0, check.peakRatioV || 0);
+  const localScore = Math.max(check.localHorizontal?.score || 0, check.localVertical?.score || 0);
+  const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
+  const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
+  const internalScore = Math.max(check.internalHorizontal?.score || 0, check.internalVertical?.score || 0);
+  const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
+  const internalLineRisk = Boolean(check.internalHorizontal?.lineRisk || check.internalVertical?.lineRisk || internalWorst > 16 || internalScore > 9);
+  const cornerScore = Math.max(check.cornerScore || 0, check.tiledCorner?.score || 0);
+  const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
+  const cornerOnlyRisk = cornerScore > 7.2 || cornerWorst > 14 || check.tiledCorner?.junctionRisk;
+  const edgeClosureStable = (
+    edgeDominant <= 9.2 &&
+    peakRatio <= 0.14 &&
+    localScore <= 11 &&
+    localWorst <= 23 &&
+    borderWorst <= 96 &&
+    !check.borderHorizontal?.objectRisk &&
+    !check.borderVertical?.objectRisk &&
+    !check.driftHorizontal?.driftRisk &&
+    !check.driftVertical?.driftRisk
+  );
+
+  if (!edgeClosureStable || (!internalLineRisk && !cornerOnlyRisk)) return check;
+
+  const repairableIssues = [];
+  if (internalLineRisk) repairableIssues.push("内部接缝线明显，可修复");
+  if (cornerOnlyRisk) repairableIssues.push("四角平铺交汇明显，可修复");
+  if (!repairableIssues.length) repairableIssues.push("接缝过渡不自然，可修复");
+
+  check.issues = repairableIssues;
+  check.repairability = "repairable";
+  check.finalIssueType = repairableIssues[0];
   return check;
 }
 

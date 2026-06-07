@@ -304,6 +304,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - If AI repair budget is exhausted, the button can still fall back to strict periodic repair or local edge blending when those paths are appropriate.
 - Failed manual AI repair remains non-downloadable until the full commercial certification gate passes.
 
+## 0.7.50 Internal Guide-Line AI Repair
+
+- AI Offset repair masks now include the center cross plus narrow editable guide bands at 1/4, 1/3, 2/3, and 3/4 positions.
+- Candidates whose outer edges are already numerically closed but still show internal guide lines or 2x2 corner junction marks are reclassified as repairable instead of terminal seam failures.
+- The prompt explicitly asks the image model to redraw internal guide-line bands naturally, removing grid seams without changing the whole textile style.
+- Hard failures such as motif overlap, low information, frames, wrong output form, low-resolution artifacts, compression blocks, and final-edge hard lines are not reclassified.
+- The commercial download gate is unchanged: these candidates still need to pass the full seam, print, metadata, and certification checks before download.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

@@ -48,6 +48,54 @@ test("manual AI follow-up preserves the commercial download gate", () => {
   assert.match(aiFollowupSource, /未通过认证前不开放成品下载/, "failed AI follow-up should keep the user-facing no-download warning");
 });
 
+test("closed edges with internal guide lines are classified as repairable, not terminal failures", () => {
+  const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
+  const check = makeClosedEdgeInternalLineCheck();
+
+  normalizeRepairableSeamIssue(check);
+
+  assert.equal(check.repairability, "repairable");
+  assert.equal(check.finalIssueType, "内部接缝线明显，可修复");
+  assert.deepEqual(check.issues, ["内部接缝线明显，可修复", "四角平铺交汇明显，可修复"]);
+});
+
+test("hard visual failures are not reclassified as repairable internal lines", () => {
+  const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
+  const check = {
+    ...makeClosedEdgeInternalLineCheck(),
+    issues: ["花型元素叠加，不可修复", "横档未衔接，不可修复"],
+    finalIssueType: "花型元素叠加，不可修复",
+  };
+
+  normalizeRepairableSeamIssue(check);
+
+  assert.equal(check.repairability, "unrepairable");
+  assert.equal(check.finalIssueType, "花型元素叠加，不可修复");
+});
+
+test("AI offset repair mask opens common internal guide-line bands", () => {
+  const { internalGuideLineEditStrength } = loadMaskHelpers();
+  const maskSource = extractFunction(appSource, "drawOffsetRepairMask");
+  const quarter = internalGuideLineEditStrength(250, 1000);
+  const third = internalGuideLineEditStrength(333, 1000);
+  const far = internalGuideLineEditStrength(120, 1000);
+
+  assert.ok(quarter > 0.68, `quarter guide band should be editable; got ${quarter}`);
+  assert.ok(third > 0.62, `third guide band should be editable; got ${third}`);
+  assert.equal(far, 0, `far non-guide area should stay protected; got ${far}`);
+  assert.match(maskSource, /internalGuideLineEditStrength\(y, height\)/);
+  assert.match(maskSource, /internalGuideLineEditStrength\(x, width\)/);
+});
+
+test("AI offset repair prompt names internal guide-line redraws", () => {
+  const buildOffsetRepairPrompt = compileFunction(appSource, "buildOffsetRepairPrompt");
+  const prompt = buildOffsetRepairPrompt({ issues: ["内部接缝线明显，可修复"] });
+
+  assert.ok(prompt.includes("1/4、1/3、2/3、3/4"));
+  assert.match(prompt, /内部导线带/);
+  assert.match(prompt, /网格线/);
+});
+
 function loadRepairAvailabilityHelpers() {
   const source = [
     "const maxAiSeamRepairs = 2;",
@@ -59,6 +107,16 @@ function loadRepairAvailabilityHelpers() {
   ].join("\n");
   return Function(`"use strict"; ${source}
     return { shouldOfferTaskRepair, shouldEdgeBlendRepair, shouldForcePeriodicRepair, shouldAiOffsetRepair };
+  `)();
+}
+
+function loadMaskHelpers() {
+  const source = [
+    extractFunction(appSource, "seamEditStrength"),
+    extractFunction(appSource, "internalGuideLineEditStrength"),
+  ].join("\n");
+  return Function(`"use strict"; ${source}
+    return { internalGuideLineEditStrength };
   `)();
 }
 
@@ -88,6 +146,34 @@ function makeAiOnlyRepairableCheck() {
     mirrorHorizontal: { worstScore: 86, mirrorRisk: true },
     mirrorVertical: { worstScore: 72, mirrorRisk: true },
   };
+}
+
+function makeClosedEdgeInternalLineCheck() {
+  return {
+    passed: false,
+    score: 8.2,
+    horizontalScore: 1.2,
+    verticalScore: 0.8,
+    cornerScore: 14.5,
+    peakRatioH: 0.04,
+    peakRatioV: 0.03,
+    issues: ["横档未衔接，不可修复", "竖档未衔接，不可修复", "回头没接，不可修复"],
+    finalIssueType: "横档未衔接，不可修复",
+    repairability: "unrepairable",
+    borderHorizontal: { worstMismatch: 8, objectRisk: false },
+    borderVertical: { worstMismatch: 6, objectRisk: false },
+    localHorizontal: { score: 0.4, worstScore: 1.3 },
+    localVertical: { score: 0.2, worstScore: 0.9 },
+    internalHorizontal: { score: 28, worstScore: 38, lineRisk: true },
+    internalVertical: { score: 31, worstScore: 42, lineRisk: true },
+    tiledCorner: { score: 9, worstScore: 16, junctionRisk: false },
+    driftHorizontal: { driftRisk: false },
+    driftVertical: { driftRisk: false },
+  };
+}
+
+function compileFunction(source, name) {
+  return Function(`"use strict"; return (${extractFunction(source, name)});`)();
 }
 
 function extractFunction(source, name) {
