@@ -296,6 +296,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - This lets human review, fission, or follow-up repair start from a locally improved seam base without weakening the commercial gate.
 - Tests confirm rejected fallback branches expose a candidate, and the generation loop considers that candidate before automatic regeneration overwrites the current task image.
 
+## 0.7.49 Manual AI Seam Repair Routing
+
+- The manual repair button now uses the same repair availability gate as the automatic pipeline.
+- If a failed candidate is suitable for AI Offset repair and still has AI repair budget, the button stays available and routes to AI-generated seam transition repair first.
+- Mirror-axis marks, bounded drift, corner junctions, and other nontrivial seam-transition failures no longer fall through into simple local edge blending.
+- If AI repair budget is exhausted, the button can still fall back to strict periodic repair or local edge blending when those paths are appropriate.
+- Failed manual AI repair remains non-downloadable until the full commercial certification gate passes.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

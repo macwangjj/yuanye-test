@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.48-test";
+const clientVersion = "0.7.49-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -1194,7 +1194,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
 
     task.nodes.enhance.disabled = false;
     task.nodes.fission.disabled = false;
-    task.nodes.repair.disabled = !(shouldEdgeBlendRepair(lastCheck) || shouldForcePeriodicRepair(lastCheck));
+    task.nodes.repair.disabled = !shouldOfferTaskRepair(task, lastCheck);
     task.nodes.check.disabled = false;
     task.nodes.generate.textContent = "重新生成";
     task.qualityPassed = Boolean(lastCheck?.passed);
@@ -1342,7 +1342,7 @@ async function enhanceTask(task) {
     task.nodes.select.disabled = !check.passed;
     task.nodes.select.checked = check.passed;
     toggleTaskSelection(task);
-    task.nodes.repair.disabled = !shouldHybridSeamRepair(check);
+    task.nodes.repair.disabled = !shouldOfferTaskRepair(task, check);
     updateTaskDownloadGate(task);
     await saveHistory(task, historyMarker, "enhance");
     setTaskStatus(task, check.passed ? "已完成" : "需人工复核", check.passed
@@ -1398,9 +1398,27 @@ async function repairTask(task, options = {}) {
   }
 
   const baseCheck = task.seamCheck || await checkSeamQuality(task.resultJpgUrl);
-  if (!shouldEdgeBlendRepair(baseCheck) && shouldForcePeriodicRepair(baseCheck)) {
+  const canAiOffset = canRunAiOffsetRepair(task, baseCheck);
+  const canEdgeBlend = shouldEdgeBlendRepair(baseCheck);
+  const canForcePeriodic = shouldForcePeriodicRepair(baseCheck);
+
+  if (canAiOffset) {
+    return await aiOffsetRepairFollowupTask(task, baseCheck, options);
+  }
+
+  if (!canEdgeBlend && canForcePeriodic) {
     return await forceSeamlessTask(task, options);
   }
+
+  if (!canEdgeBlend) {
+    task.nodes.repair.disabled = true;
+    if (!options.quiet) {
+      setTaskStatus(task, "需人工复核", `${seamFailureMessage(baseCheck)}。当前底稿不适合继续轻修，请重新生成或裂变。`, 100);
+      showToast("当前底稿需要重生或裂变");
+    }
+    return baseCheck;
+  }
+
   task.nodes.repair.disabled = true;
   if (!options.quiet) {
     setTaskStatus(task, "生成中", "正在做接缝平滑处理。", 88);
@@ -1436,7 +1454,47 @@ async function repairTask(task, options = {}) {
     if (!options.quiet) setTaskStatus(task, "失败", `接缝平滑失败：${error.message}`, 100);
     throw error;
   } finally {
-    task.nodes.repair.disabled = false;
+    task.nodes.repair.disabled = options.quiet ? true : !shouldOfferTaskRepair(task, task.seamCheck);
+  }
+}
+
+async function aiOffsetRepairFollowupTask(task, baseCheck, options = {}) {
+  if (!task.resultJpgUrl) {
+    if (!options.quiet) showToast("请先生成图片");
+    return null;
+  }
+
+  task.nodes.repair.disabled = true;
+  if (!options.quiet) {
+    setTaskStatus(task, "生成中", "正在让 AI 重新生成接缝丝滑过渡。", 90);
+  }
+
+  let repairCheck = baseCheck;
+  try {
+    repairCheck = await improveWithAiOffsetRepair(task, baseCheck);
+    task.repairCheck = repairCheck;
+    task.locallyRepaired = Boolean(repairCheck?.passed);
+    task.qualityPassed = Boolean(repairCheck?.passed);
+    task.nodes.select.disabled = !repairCheck?.passed;
+    task.nodes.select.checked = Boolean(repairCheck?.passed);
+    toggleTaskSelection(task);
+    updateTaskDownloadGate(task);
+
+    if (options.manual) {
+      await saveHistory(task, createHistoryMarker(repairCheck.passed ? "repair" : "review"), repairCheck.passed ? "repair" : "review");
+    }
+
+    if (!options.quiet) {
+      setTaskStatus(task, repairCheck.passed ? "已完成" : "需人工复核", repairCheck.passed
+        ? `AI 丝滑过渡修缝通过，${task.seamRating}，可以下载 JPG。`
+        : `AI 丝滑过渡后仍未通过，${seamFailureMessage(repairCheck)}；未通过认证前不开放成品下载。`, 100);
+    }
+    return repairCheck;
+  } catch (error) {
+    if (!options.quiet) setTaskStatus(task, "失败", `AI 丝滑过渡修缝失败：${error.message}`, 100);
+    throw error;
+  } finally {
+    task.nodes.repair.disabled = options.quiet ? true : !shouldOfferTaskRepair(task, task.seamCheck || repairCheck);
   }
 }
 
@@ -1480,7 +1538,7 @@ async function forceSeamlessTask(task, options = {}) {
     if (!options.quiet) setTaskStatus(task, "失败", `强制四方连续处理失败：${error.message}`, 100);
     throw error;
   } finally {
-    task.nodes.repair.disabled = false;
+    task.nodes.repair.disabled = options.quiet ? true : !shouldOfferTaskRepair(task, task.seamCheck);
   }
 }
 
@@ -1772,6 +1830,26 @@ function shouldHybridSeamRepair(check) {
     Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0) > 170
   );
   return Boolean(structuralIssue && !tooSevere);
+}
+
+function canRunAiOffsetRepair(task, check) {
+  return Boolean(
+    task &&
+    (task.aiRepairAttempts || 0) < maxAiSeamRepairs &&
+    shouldAiOffsetRepair(check)
+  );
+}
+
+function shouldOfferTaskRepair(task, check) {
+  return Boolean(
+    check &&
+    !check.passed &&
+    (
+      canRunAiOffsetRepair(task, check) ||
+      shouldEdgeBlendRepair(check) ||
+      shouldForcePeriodicRepair(check)
+    )
+  );
 }
 
 function shouldEdgeBlendRepair(check) {
