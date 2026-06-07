@@ -169,17 +169,22 @@ test("localized motif overlap can route to AI repair without weakening severe ov
 });
 
 test("AI offset repair mask opens common internal guide-line bands", () => {
-  const { internalGuideLineEditStrength } = loadMaskHelpers();
+  const { internalGuideLineEditStrength, internalGuideJunctionEditStrength } = loadMaskHelpers();
   const maskSource = extractFunction(appSource, "drawOffsetRepairMask");
   const quarter = internalGuideLineEditStrength(250, 1000);
   const third = internalGuideLineEditStrength(333, 1000);
   const far = internalGuideLineEditStrength(120, 1000);
+  const junction = internalGuideJunctionEditStrength(250, 250, 1000, 1000);
+  const offJunction = internalGuideJunctionEditStrength(120, 120, 1000, 1000);
 
   assert.ok(quarter > 0.68, `quarter guide band should be editable; got ${quarter}`);
   assert.ok(third > 0.62, `third guide band should be editable; got ${third}`);
   assert.equal(far, 0, `far non-guide area should stay protected; got ${far}`);
+  assert.ok(junction > 0.9, `guide-line junction should be strongly editable; got ${junction}`);
+  assert.equal(offJunction, 0, `off-junction textile area should stay protected; got ${offJunction}`);
   assert.match(maskSource, /internalGuideLineEditStrength\(y, height\)/);
   assert.match(maskSource, /internalGuideLineEditStrength\(x, width\)/);
+  assert.match(maskSource, /internalGuideJunctionEditStrength\(x, y, width, height\)/);
 });
 
 test("AI offset repair mask makes seam bands transparent and protected areas opaque", () => {
@@ -192,6 +197,7 @@ test("AI offset repair mask makes seam bands transparent and protected areas opa
 
   assert.ok(alphaAt(ctx.imageData.data, width, 500, 500) < 8, "center offset seam should be fully editable");
   assert.ok(alphaAt(ctx.imageData.data, width, 250, 120) < 100, "internal guide band should be editable");
+  assert.ok(alphaAt(ctx.imageData.data, width, 250, 250) < 24, "internal guide junction should be strongly editable");
   assert.equal(alphaAt(ctx.imageData.data, width, 120, 120), 255, "off-seam textile area should stay protected");
 });
 
@@ -201,6 +207,7 @@ test("AI offset repair prompt names internal guide-line redraws", () => {
 
   assert.ok(prompt.includes("1/4、1/3、2/3、3/4"));
   assert.match(prompt, /内部导线带/);
+  assert.match(prompt, /导线交叉点/);
   assert.match(prompt, /网格线/);
   assert.match(prompt, /局部花型叠加/);
   assert.match(prompt, /贴片遮盖/);
@@ -224,9 +231,10 @@ function loadMaskHelpers() {
   const source = [
     extractFunction(appSource, "seamEditStrength"),
     extractFunction(appSource, "internalGuideLineEditStrength"),
+    extractFunction(appSource, "internalGuideJunctionEditStrength"),
   ].join("\n");
   return Function(`"use strict"; ${source}
-    return { internalGuideLineEditStrength };
+    return { internalGuideLineEditStrength, internalGuideJunctionEditStrength };
   `)();
 }
 
@@ -234,6 +242,7 @@ function loadMaskRenderer() {
   const source = [
     extractFunction(appSource, "seamEditStrength"),
     extractFunction(appSource, "internalGuideLineEditStrength"),
+    extractFunction(appSource, "internalGuideJunctionEditStrength"),
     extractFunction(appSource, "drawOffsetRepairMask"),
   ].join("\n");
   return Function(`"use strict"; ${source}

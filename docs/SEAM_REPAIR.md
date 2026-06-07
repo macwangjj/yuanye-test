@@ -355,6 +355,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - QA rechecks on 19 historical overlap failures changed routing from 19/19 repairable to 6 repairable and 13 regeneration-only, which better separates local edge encoding defects from true motif/edge misalignment.
 - The commercial download gate remains unchanged: a final-edge repair candidate must still pass the full seam, print-size, 300dpi, clarity, and certification checks before any JPG download is enabled.
 
+## 0.7.59 Internal Guide-Junction Inpainting
+
+- Recent QA rechecks showed several near-pass candidates where the outside edges were mostly closed but a visible internal guide line or 2x2 junction mark remained.
+- The AI Offset repair mask now opens small stronger edit pockets at the intersections of the 1/4, 1/3, 1/2, 2/3, and 3/4 guide bands, in addition to the existing center cross and guide-line bands.
+- The prompt now explicitly tells the image model to redraw guide-line intersections naturally, removing grid hard points without changing the protected textile field.
+- This keeps the external commercial gate unchanged: repaired candidates still need to pass the full seam, print-size, DPI, clarity, and certification checks before download.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

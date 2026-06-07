@@ -27,7 +27,7 @@ test("health check stays public while protected APIs still require login", async
     const payload = await health.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.auth, true);
-    assert.equal(payload.version, "0.7.58-test");
+    assert.equal(payload.version, "0.7.59-test");
 
     const protectedResponse = await fetch(`http://127.0.0.1:${port}/api/history`, {
       headers: { Accept: "application/json" },

@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.58-test";
+const clientVersion = "0.7.59-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -1799,11 +1799,11 @@ function buildOffsetRepairPrompt(previousCheck = null) {
   const issueText = previousCheck?.issues?.length ? previousCheck.issues.join("、") : "中心十字接缝风险";
   return `这张图是一个四方连续印花单元经过 Offset 偏移后的中间修缝图：原本的上下/左右边缘接缝已经被移动到画面中心，形成可能可见的水平和垂直十字接缝。
 
-请重点重绘画面中心十字接缝附近的过渡区域；如果蒙版还开放了 1/4、1/3、2/3、3/4 附近的细长内部导线带，也要一并自然重绘。若上一轮有局部花型叠加，请把堆叠处改成自然穿插、合理留白和连续枝叶纹理，让 AI 生成丝滑衔接，而不是硬拼、镜像、糊边、网格线、贴片遮盖或简单平均颜色。上一轮检测问题：${issueText}。
+请重点重绘画面中心十字接缝附近的过渡区域；如果蒙版还开放了 1/4、1/3、2/3、3/4 附近的细长内部导线带和导线交叉点，也要一并自然重绘。若上一轮有局部花型叠加，请把堆叠处改成自然穿插、合理留白和连续枝叶纹理，让 AI 生成丝滑衔接，而不是硬拼、镜像、糊边、网格线、贴片遮盖或简单平均颜色。上一轮检测问题：${issueText}。
 
 必须严格执行：
 1. 已提供蒙版：透明和半透明区域是允许重绘的中心十字接缝带，蒙版外侧应尽量保持原图稳定。
-2. 允许在中心水平线、中心垂直线以及蒙版开放的内部导线带附近做自然变化、补画、重绘和过渡生成；小幅元素变化可以接受，目标是无缝和自然。
+2. 允许在中心水平线、中心垂直线、蒙版开放的内部导线带以及导线交叉点附近做自然变化、补画、重绘和过渡生成；小幅元素变化可以接受，目标是无缝和自然。
 3. 保持外侧四边 10% 区域尽量稳定，因为这些外侧边界已经是连续边界，不能新增白边、黑边、画框或边缘拼接线。
 4. 中心十字修复后，纹理、笔触、花枝、叶片、抽象纹路、明暗层次必须自然穿过中心线；要像原本就连续绘制，而不是后期拼接。
 5. 如果中心线附近有元素断头或局部花型叠加，可以补出合理的枝叶、花瓣、纹理走向、留白关系或背景过渡；如果有明暗突变，可以生成自然渐变和局部纹理变化。
@@ -2317,7 +2317,8 @@ function drawOffsetRepairMask(ctx, width, height) {
       const dx = Math.abs(x - centerX);
       const verticalEdit = seamEditStrength(dx, coreX, featherX);
       const verticalGuideEdit = internalGuideLineEditStrength(x, width);
-      const edit = Math.max(horizontalEdit, verticalEdit, horizontalGuideEdit, verticalGuideEdit);
+      const guideJunctionEdit = internalGuideJunctionEditStrength(x, y, width, height);
+      const edit = Math.max(horizontalEdit, verticalEdit, horizontalGuideEdit, verticalGuideEdit, guideJunctionEdit);
       const alpha = Math.round(255 * (1 - edit));
       const index = (y * width + x) * 4;
       data[index] = 255;
@@ -2342,6 +2343,25 @@ function internalGuideLineEditStrength(position, size) {
   }
 
   return strength * 0.72;
+}
+
+function internalGuideJunctionEditStrength(x, y, width, height) {
+  const guideRatios = [0.25, 1 / 3, 0.5, 2 / 3, 0.75];
+  const size = Math.min(width, height);
+  const core = Math.max(8, size * 0.018);
+  const feather = Math.max(core + 1, size * 0.085);
+  let strength = 0;
+
+  for (const ratioY of guideRatios) {
+    const centerY = height * ratioY;
+    for (const ratioX of guideRatios) {
+      const centerX = width * ratioX;
+      const distance = Math.hypot((x - centerX) * (size / width), (y - centerY) * (size / height));
+      strength = Math.max(strength, seamEditStrength(distance, core, feather));
+    }
+  }
+
+  return strength * 0.92;
 }
 
 function seamEditStrength(distance, core, feather) {
