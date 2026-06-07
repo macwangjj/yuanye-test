@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.29-test";
+const clientVersion = "0.7.30-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -496,7 +496,8 @@ function recordHasCertifiedDownload(record) {
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
-    typeof gate.preTiledPreviewScore === "number"
+    typeof gate.preTiledPreviewScore === "number" &&
+    typeof gate.textureDensityScore === "number"
   );
 }
 
@@ -561,6 +562,8 @@ function buildPrintCertification(task, actionType = "generate") {
       mirrorAxisWorstScore: Math.max(check.mirrorHorizontal?.worstScore || 0, check.mirrorVertical?.worstScore || 0),
       preTiledPreviewScore: typeof check.preTiledPreview?.score === "number" ? check.preTiledPreview.score : null,
       preTiledDuplicatePairs: typeof check.preTiledPreview?.duplicatePairs === "number" ? check.preTiledPreview.duplicatePairs : null,
+      textureDensityScore: typeof check.textureDensity?.textureDensityScore === "number" ? check.textureDensity.textureDensityScore : null,
+      fineDetailRatio: typeof check.textureDensity?.fineDetailRatio === "number" ? check.textureDensity.fineDetailRatio : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
     },
   };
@@ -1545,7 +1548,7 @@ function shouldForcePeriodicRepair(check) {
 }
 
 function shouldPrintClarityEnhance(check) {
-  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足")));
+  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足") || issue.includes("细节密度不足")));
 }
 
 async function runSeamCheck(task, quiet = false) {
@@ -1567,6 +1570,7 @@ function seamRating(checkOrScore) {
   const check = typeof checkOrScore === "number" ? { score: checkOrScore, passed: checkOrScore <= 3.5, issues: [] } : checkOrScore;
   if (check.passed && check.score <= 2.2) return "可通过";
   if (check.passed) return "轻微风险但可通过";
+  if (check.repairability === "enhanceable") return check.finalIssueType || "可增强";
   if (check.repairability === "repairable") return check.finalIssueType || "可轻修";
   if (check.finalIssueType) return check.finalIssueType;
   if (check.issues?.includes("横档未衔接，不可修复")) return "横档未衔接，不可修复";
@@ -1616,11 +1620,12 @@ function seamCheckSummary(check) {
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
+    `密度 ${(Number(check.textureDensity?.fineDetailRatio || 0) * 100).toFixed(0)}%`,
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
     `镜像 ${Math.max(check.mirrorHorizontal?.score || 0, check.mirrorVertical?.score || 0).toFixed(2)}`,
     `预平铺 ${Number(check.preTiledPreview?.score || 0).toFixed(2)}`,
     check.printSpec?.passed === true ? "规格通过" : "规格失败",
-    check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
+    check.repairability === "enhanceable" ? "可增强" : check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
   return check.passed
     ? `四方循环检查：${check.rating}，${details}。`
@@ -1637,6 +1642,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("花型分布过于集中，不可修复")) return "花型分布过于集中，不可修复";
   if (check.issues?.includes("疑似平铺预览输出，不可修复")) return "疑似平铺预览输出，不可修复";
   if (check.issues?.includes("镜像轴痕明显，可修复")) return "镜像轴痕明显，可修复";
+  if (check.issues?.includes("印花细节密度不足，可增强")) return "印花细节密度不足，可增强";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
   return "检测到接缝风险";
@@ -2080,6 +2086,7 @@ function measureSeamQuality(ctx, width, height) {
   const driftVertical = measureEdgeDrift(data, width, height, "vertical");
   const clarity = measurePrintClarity(data, width, height);
   const richness = measurePrintRichness(data, width, height);
+  const textureDensity = measurePrintTextureDensity(data, width, height);
   const layoutBalance = measurePatternBalance(data, width, height);
   const mirrorHorizontal = measureMirrorAxisArtifact(data, width, height, "horizontal");
   const mirrorVertical = measureMirrorAxisArtifact(data, width, height, "vertical");
@@ -2139,6 +2146,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && bandArtifactRisk) issues.push("平铺边带明显，可修复");
   if (!issues.length && seamDetailRisk) issues.push("接缝细节发虚，可修复");
   if (!issues.length && clarity.blurRisk) issues.push("成品清晰度不足，可增强");
+  if (!issues.length && textureDensity.lowTextureDensityRisk) issues.push("印花细节密度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
@@ -2147,7 +2155,9 @@ function measureSeamQuality(ctx, width, height) {
     ? "unrepairable"
     : issues.some((issue) => issue.includes("可修复"))
       ? "repairable"
-      : "pass";
+      : issues.some((issue) => issue.includes("可增强"))
+        ? "enhanceable"
+        : "pass";
   const passed = (
     repairability === "pass" &&
     score <= 4.8 &&
@@ -2172,6 +2182,7 @@ function measureSeamQuality(ctx, width, height) {
     !mirrorRisk &&
     !preTiledPreviewRisk &&
     !richness.lowInformationRisk &&
+    !textureDensity.lowTextureDensityRisk &&
     !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
   );
@@ -2209,6 +2220,7 @@ function measureSeamQuality(ctx, width, height) {
     preTiledPreview,
     clarity,
     richness,
+    textureDensity,
     layoutBalance,
     repairability: passed ? "pass" : repairability,
     finalIssueType,
@@ -3126,6 +3138,59 @@ function measurePrintRichness(data, width, height) {
     contrastScore,
     colorSpreadScore,
     lowInformationRisk,
+  };
+}
+
+function measurePrintTextureDensity(data, width, height) {
+  const step = Math.max(1, Math.round(Math.max(width, height) / 280));
+  let gradientTotal = 0;
+  let detailTotal = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let activeSamples = 0;
+  let fineDetailSamples = 0;
+  let count = 0;
+
+  for (let y = step; y < height - step; y += step) {
+    for (let x = step; x < width - step; x += step) {
+      const detail = pixelDetailAt(data, width, height, x, y);
+      const center = pixelLuminance(data, width, x, y);
+      const detailRatio = detail.detail / Math.max(1, detail.gradient);
+
+      gradientTotal += detail.gradient;
+      detailTotal += detail.detail;
+      lumTotal += center;
+      lumSquareTotal += center * center;
+      if (detail.gradient > 4.6 || detail.detail > 1.35) activeSamples += 1;
+      if (detail.detail > 2.2 || (detail.gradient > 7 && detailRatio > 0.22)) fineDetailSamples += 1;
+      count += 1;
+    }
+  }
+
+  const gradientScore = gradientTotal / Math.max(1, count);
+  const detailScore = detailTotal / Math.max(1, count);
+  const mean = lumTotal / Math.max(1, count);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - mean * mean));
+  const activeRatio = activeSamples / Math.max(1, count);
+  const fineDetailRatio = fineDetailSamples / Math.max(1, count);
+  const textureDensityScore = detailScore * 1.25 + gradientScore * 0.28 + fineDetailRatio * 26 + activeRatio * 8;
+  const lowTextureDensityRisk = (
+    contrastScore > 5.8 &&
+    activeRatio < 0.22 &&
+    fineDetailRatio < 0.09 &&
+    detailScore < 1.85 &&
+    gradientScore < 5.6 &&
+    textureDensityScore < 6.2
+  );
+
+  return {
+    textureDensityScore,
+    activeRatio,
+    fineDetailRatio,
+    detailScore,
+    gradientScore,
+    contrastScore,
+    lowTextureDensityRisk,
   };
 }
 

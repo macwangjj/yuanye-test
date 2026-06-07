@@ -156,6 +156,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `preTiledPreviewScore` and `preTiledDuplicatePairs`; history downloads require the current pre-tiled preview gate.
 - Tests cover a normal all-over tile that must pass and a synthetic 2x2 repeated output that must fail.
 
+## 0.7.30 Print Texture Density Gate
+
+- The quality gate now measures printable fine-detail density separately from broad contrast and blur.
+- Low-detail wash outputs are rejected as `印花细节密度不足，可增强`, even when they are not empty enough for the low-information gate.
+- This issue is routed through the clarity-enhancement path first, then regeneration if the enhanced result still cannot pass certification.
+- Certification metadata stores `textureDensityScore` and `fineDetailRatio`; history downloads require the current texture-density gate.
+- Tests cover sharp printable texture that must pass and a soft low-detail output that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

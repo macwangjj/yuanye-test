@@ -163,6 +163,19 @@ test("print richness check rejects nearly empty low-information output", () => {
   assert.ok(sharpRichness.richnessScore > flatRichness.richnessScore * 3, `pattern richness should be much higher; sharp=${sharpRichness.richnessScore} flat=${flatRichness.richnessScore}`);
 });
 
+test("print texture density check rejects soft low-detail output", () => {
+  const width = 180;
+  const height = 180;
+  const sharp = makeSharpPrintPattern(width, height);
+  const soft = makeSoftLowDetailPattern(width, height);
+  const sharpDensity = measurePrintTextureDensityCore(sharp, width, height);
+  const softDensity = measurePrintTextureDensityCore(soft, width, height);
+
+  assert.equal(sharpDensity.lowTextureDensityRisk, false, `sharp printable texture should pass density gate; got ${JSON.stringify(sharpDensity)}`);
+  assert.equal(softDensity.lowTextureDensityRisk, true, `soft low-detail texture should be rejected; got ${JSON.stringify(softDensity)}`);
+  assert.ok(sharpDensity.fineDetailRatio > softDensity.fineDetailRatio * 3, `sharp output should have much more fine detail; sharp=${sharpDensity.fineDetailRatio} soft=${softDensity.fineDetailRatio}`);
+});
+
 test("pattern balance check rejects a single centered motif with quiet edges", () => {
   const width = 180;
   const height = 180;
@@ -261,6 +274,21 @@ function makeFlatPrint(width, height, color) {
       data[i] = color[0];
       data[i + 1] = color[1];
       data[i + 2] = color[2];
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function makeSoftLowDetailPattern(width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const wash = Math.sin(x * 0.028) * 30 + Math.cos(y * 0.024) * 24 + Math.sin((x + y) * 0.018) * 18;
+      data[i] = clamp(142 + wash);
+      data[i + 1] = clamp(126 + wash * 0.82);
+      data[i + 2] = clamp(104 + wash * 0.6);
       data[i + 3] = 255;
     }
   }
@@ -1122,6 +1150,59 @@ function measurePrintRichnessCore(data, width, height) {
     contrastScore,
     colorSpreadScore,
     lowInformationRisk,
+  };
+}
+
+function measurePrintTextureDensityCore(data, width, height) {
+  const step = Math.max(1, Math.round(Math.max(width, height) / 280));
+  let gradientTotal = 0;
+  let detailTotal = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let activeSamples = 0;
+  let fineDetailSamples = 0;
+  let count = 0;
+
+  for (let y = step; y < height - step; y += step) {
+    for (let x = step; x < width - step; x += step) {
+      const detail = pixelDetailAt(data, width, height, x, y);
+      const center = pixelLuminance(data, width, x, y);
+      const detailRatio = detail.detail / Math.max(1, detail.gradient);
+
+      gradientTotal += detail.gradient;
+      detailTotal += detail.detail;
+      lumTotal += center;
+      lumSquareTotal += center * center;
+      if (detail.gradient > 4.6 || detail.detail > 1.35) activeSamples += 1;
+      if (detail.detail > 2.2 || (detail.gradient > 7 && detailRatio > 0.22)) fineDetailSamples += 1;
+      count += 1;
+    }
+  }
+
+  const gradientScore = gradientTotal / Math.max(1, count);
+  const detailScore = detailTotal / Math.max(1, count);
+  const mean = lumTotal / Math.max(1, count);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - mean * mean));
+  const activeRatio = activeSamples / Math.max(1, count);
+  const fineDetailRatio = fineDetailSamples / Math.max(1, count);
+  const textureDensityScore = detailScore * 1.25 + gradientScore * 0.28 + fineDetailRatio * 26 + activeRatio * 8;
+  const lowTextureDensityRisk = (
+    contrastScore > 5.8 &&
+    activeRatio < 0.22 &&
+    fineDetailRatio < 0.09 &&
+    detailScore < 1.85 &&
+    gradientScore < 5.6 &&
+    textureDensityScore < 6.2
+  );
+
+  return {
+    textureDensityScore,
+    activeRatio,
+    fineDetailRatio,
+    detailScore,
+    gradientScore,
+    contrastScore,
+    lowTextureDensityRisk,
   };
 }
 
