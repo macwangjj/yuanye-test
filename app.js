@@ -1238,6 +1238,7 @@ function shouldRefineAiSeamRepair(next, previous) {
 function taskRepairableVisualIssue(check) {
   return Boolean(check?.issues?.some((issue) => (
     issue.includes("平铺边带") ||
+    issue.includes("平铺预览") ||
     issue.includes("细线接缝") ||
     issue.includes("轻微色差") ||
     issue.includes("接缝过渡")
@@ -1255,6 +1256,8 @@ function seamVisualWorstScore(check) {
     check?.internalVertical?.worstScore || 0,
     check?.bandHorizontal?.worstScore || 0,
     check?.bandVertical?.worstScore || 0,
+    check?.tiledHorizontal?.worstScore || 0,
+    check?.tiledVertical?.worstScore || 0,
   );
 }
 
@@ -1312,7 +1315,8 @@ function shouldEdgeBlendRepair(check) {
       issue.includes("接缝过渡") ||
       issue.includes("细线接缝") ||
       issue.includes("轻微色差") ||
-      issue.includes("平铺边带")
+      issue.includes("平铺边带") ||
+      issue.includes("平铺预览")
     )) || check.repairability === "repairable")
   );
 }
@@ -1324,13 +1328,15 @@ function shouldAiOffsetRepair(check) {
   const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
   return (
     check.score <= 420 &&
     edgeDominant <= 420 &&
     borderWorst <= 980 &&
     localWorst <= 280 &&
     internalWorst <= 240 &&
-    bandWorst <= 320
+    bandWorst <= 320 &&
+    tiledWorst <= 320
   );
 }
 
@@ -1340,12 +1346,14 @@ function shouldForcePeriodicRepair(check) {
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
   return (
     check.score <= 140 &&
     edgeDominant <= 180 &&
     borderWorst <= 520 &&
     internalWorst <= 90 &&
-    bandWorst <= 140
+    bandWorst <= 140 &&
+    tiledWorst <= 140
   );
 }
 
@@ -1409,6 +1417,7 @@ function seamCheckSummary(check) {
     `左右 ${check.verticalScore.toFixed(2)}`,
     `角点 ${check.cornerScore.toFixed(2)}`,
     `边带 ${Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0).toFixed(2)}`,
+    `平铺 ${Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0).toFixed(2)}`,
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
   return check.passed
@@ -1831,6 +1840,8 @@ function measureSeamQuality(ctx, width, height) {
   const borderVertical = measureBorderObjectRisk(data, width, height, "vertical");
   const bandHorizontal = measureEdgeBandArtifact(data, width, height, "horizontal");
   const bandVertical = measureEdgeBandArtifact(data, width, height, "vertical");
+  const tiledHorizontal = measureTiledPreviewSeam(data, width, height, "horizontal");
+  const tiledVertical = measureTiledPreviewSeam(data, width, height, "vertical");
   const peakLimitH = Math.max(18, Math.round((band * samplesX) * 0.12));
   const peakLimitV = Math.max(18, Math.round((band * samplesY) * 0.12));
   const peakRatioH = horizontalPeaks / Math.max(1, band * samplesX);
@@ -1843,6 +1854,8 @@ function measureSeamQuality(ctx, width, height) {
   const maxInternalWorst = Math.max(internalHorizontal.worstScore, internalVertical.worstScore);
   const maxBandScore = Math.max(bandHorizontal.score, bandVertical.score);
   const maxBandWorst = Math.max(bandHorizontal.worstScore, bandVertical.worstScore);
+  const maxTiledScore = Math.max(tiledHorizontal.score, tiledVertical.score);
+  const maxTiledWorst = Math.max(tiledHorizontal.worstScore, tiledVertical.worstScore);
   const issues = [];
 
   const severeHorizontal = horizontalScore > 9.5 || horizontalPeaks > peakLimitH || localHorizontal.structuralRisk || internalHorizontal.lineRisk || borderHorizontal.objectRisk;
@@ -1851,6 +1864,7 @@ function measureSeamQuality(ctx, width, height) {
   const overlayRisk = (maxPeakRatio > 0.16 && maxEdgeScore > 5.8) || (maxLocalWorst > 26 && maxLocalScore > 15) || (maxInternalWorst > 24 && maxInternalScore > 12);
   const transitionRisk = (maxEdgeScore > 8.2 && maxPeakRatio > 0.08) || (maxLocalWorst > 20 && maxLocalScore > 11) || (maxInternalWorst > 18 && maxInternalScore > 9);
   const bandArtifactRisk = maxBandScore > 11 || maxBandWorst > 18 || bandHorizontal.bandRisk || bandVertical.bandRisk;
+  const tiledPreviewRisk = maxTiledScore > 9.8 || maxTiledWorst > 17 || tiledHorizontal.lineRisk || tiledVertical.lineRisk;
   const mildColor = maxEdgeScore > 3.4 && maxEdgeScore <= 7.2 && cornerScore <= 8.5 && maxPeakRatio <= 0.08 && maxLocalWorst <= 18 && maxInternalWorst <= 14;
   const thinLine = maxEdgeScore <= 6.8 && maxPeakRatio > 0.08 && maxPeakRatio <= 0.14 && cornerScore <= 8.5 && maxLocalWorst <= 20 && maxInternalWorst <= 16;
 
@@ -1859,11 +1873,12 @@ function measureSeamQuality(ctx, width, height) {
   if (severeCorner) issues.push("回头没接，不可修复");
   if (overlayRisk && !severeHorizontal && !severeVertical) issues.push("花型元素叠加，不可修复");
   if (transitionRisk && !overlayRisk && !severeHorizontal && !severeVertical) issues.push("接缝过渡不自然，不可修复");
+  if (!issues.length && tiledPreviewRisk) issues.push("平铺预览中心线明显，可修复");
   if (!issues.length && bandArtifactRisk) issues.push("平铺边带明显，可修复");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
-  const score = horizontalScore * 0.26 + verticalScore * 0.26 + cornerScore * 0.1 + maxLocalScore * 0.12 + maxInternalScore * 0.12 + maxBandScore * 0.14;
+  const score = horizontalScore * 0.23 + verticalScore * 0.23 + cornerScore * 0.09 + maxLocalScore * 0.1 + maxInternalScore * 0.1 + maxBandScore * 0.12 + maxTiledScore * 0.13;
   let repairability = issues.some((issue) => issue.includes("不可修复"))
     ? "unrepairable"
     : issues.some((issue) => issue.includes("可修复"))
@@ -1876,7 +1891,9 @@ function measureSeamQuality(ctx, width, height) {
     verticalScore <= 5.8 &&
     cornerScore <= 7.5 &&
     maxBandScore <= 8.5 &&
-    maxBandWorst <= 16
+    maxBandWorst <= 16 &&
+    maxTiledScore <= 7.4 &&
+    maxTiledWorst <= 15
   );
   if (!passed && repairability === "pass") {
     repairability = "unrepairable";
@@ -1900,6 +1917,8 @@ function measureSeamQuality(ctx, width, height) {
     borderVertical,
     bandHorizontal,
     bandVertical,
+    tiledHorizontal,
+    tiledVertical,
     repairability: passed ? "pass" : repairability,
     finalIssueType,
     issues,
@@ -2272,6 +2291,112 @@ function measureEdgeBandArtifact(data, width, height, direction) {
       (shiftWindows >= 2 && shiftRatio > 0.08)
     ),
   };
+}
+
+function measureTiledPreviewSeam(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const radius = Math.max(8, Math.min(42, Math.round(cross * 0.016)));
+  const innerGap = Math.max(radius * 2, Math.round(cross * 0.045));
+  const windowSize = Math.max(24, Math.min(112, Math.round(length / 24)));
+  const windowStep = Math.max(10, Math.round(windowSize * 0.5));
+  const sampleStep = Math.max(1, Math.round(windowSize / 18));
+  const depthStep = Math.max(1, Math.round(radius / 9));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let peakWindows = 0;
+  let haloWindows = 0;
+
+  for (let start = 0; start < length; start += windowStep) {
+    const end = Math.min(length, start + windowSize);
+    let centerJumpTotal = 0;
+    let nearJumpTotal = 0;
+    let haloShiftTotal = 0;
+    let edgeActivityTotal = 0;
+    let innerActivityTotal = 0;
+    let sampleCount = 0;
+
+    for (let along = start; along < end; along += sampleStep) {
+      const safeAlong = Math.min(length - 1, along);
+      centerJumpTotal += previewPixelDistance(data, width, safeAlong, -1, safeAlong, 0, horizontal, cross);
+      nearJumpTotal += (
+        previewPixelDistance(data, width, safeAlong, -2, safeAlong, -1, horizontal, cross) +
+        previewPixelDistance(data, width, safeAlong, 0, safeAlong, 1, horizontal, cross)
+      ) / 2;
+
+      for (let depth = 0; depth < radius; depth += depthStep) {
+        const edgeA = -1 - depth;
+        const edgeB = depth;
+        const innerA = -1 - depth - innerGap;
+        const innerB = depth + innerGap;
+        const nextEdgeA = edgeA - depthStep;
+        const nextEdgeB = edgeB + depthStep;
+        const nextInnerA = innerA - depthStep;
+        const nextInnerB = innerB + depthStep;
+
+        haloShiftTotal += (
+          previewPixelDistance(data, width, safeAlong, edgeA, safeAlong, innerA, horizontal, cross) +
+          previewPixelDistance(data, width, safeAlong, edgeB, safeAlong, innerB, horizontal, cross)
+        ) / 2;
+        edgeActivityTotal += (
+          previewPixelDistance(data, width, safeAlong, edgeA, safeAlong, nextEdgeA, horizontal, cross) +
+          previewPixelDistance(data, width, safeAlong, edgeB, safeAlong, nextEdgeB, horizontal, cross)
+        ) / 2;
+        innerActivityTotal += (
+          previewPixelDistance(data, width, safeAlong, innerA, safeAlong, nextInnerA, horizontal, cross) +
+          previewPixelDistance(data, width, safeAlong, innerB, safeAlong, nextInnerB, horizontal, cross)
+        ) / 2;
+        sampleCount += 1;
+      }
+    }
+
+    const edgeSamples = Math.max(1, Math.ceil((end - start) / sampleStep));
+    const centerJump = centerJumpTotal / edgeSamples;
+    const nearJump = nearJumpTotal / edgeSamples;
+    const haloShift = haloShiftTotal / Math.max(1, sampleCount);
+    const edgeActivity = edgeActivityTotal / Math.max(1, sampleCount);
+    const innerActivity = innerActivityTotal / Math.max(1, sampleCount);
+    const activityDrop = Math.max(0, innerActivity - edgeActivity);
+    const lineSpike = Math.max(0, centerJump - nearJump * 1.35 - innerActivity * 0.18);
+    const haloScore = Math.max(0, haloShift - innerActivity * 0.24) * 0.5 + activityDrop * 0.82;
+    const score = lineSpike * 0.9 + haloScore + Math.max(0, centerJump - edgeActivity * 0.7) * 0.18;
+
+    total += score;
+    count += 1;
+    worstScore = Math.max(worstScore, score);
+    if (lineSpike > 5.5 || centerJump > Math.max(11, nearJump * 2.2)) peakWindows += 1;
+    if (haloScore > 11 || activityDrop > 8) haloWindows += 1;
+  }
+
+  const score = total / Math.max(1, count);
+  const peakRatio = peakWindows / Math.max(1, count);
+  const haloRatio = haloWindows / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    peakWindows,
+    haloWindows,
+    peakRatio,
+    haloRatio,
+    lineRisk: (
+      worstScore > 18 ||
+      score > 10.5 ||
+      (peakWindows >= 2 && peakRatio > 0.07) ||
+      (haloWindows >= 2 && haloRatio > 0.08)
+    ),
+  };
+}
+
+function previewPixelDistance(data, width, alongA, crossA, alongB, crossB, horizontal, crossSize) {
+  const normalizedA = wrapIndex(Math.round(crossA), crossSize);
+  const normalizedB = wrapIndex(Math.round(crossB), crossSize);
+  const x1 = horizontal ? alongA : normalizedA;
+  const y1 = horizontal ? normalizedA : alongA;
+  const x2 = horizontal ? alongB : normalizedB;
+  const y2 = horizontal ? normalizedB : alongB;
+  return pixelDistance(data, width, x1, y1, x2, y2);
 }
 
 function edgeActivity(data, width, x1, y1, x2, y2) {

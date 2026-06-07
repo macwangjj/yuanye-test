@@ -6,7 +6,7 @@ This test build treats four-way repeat quality as a production requirement, not 
 
 1. Generate one repeat tile from the reference image.
 2. Export to the print target size: `4961 x 7559 px`, 300 dpi.
-3. Run seam scoring on the raw print export first. The checker looks at opposite borders, corners, local break windows, internal guide lines, one-sided border-object risk, and edge-band artifacts.
+3. Run seam scoring on the raw print export first. The checker looks at opposite borders, corners, local break windows, internal guide lines, one-sided border-object risk, edge-band artifacts, and the center cross that appears in a real 2x2 tiled preview.
 4. Use `repairSeams` as the primary local repair path:
    - feathered weights instead of a hard border average;
    - opposite-edge matching;
@@ -30,6 +30,7 @@ A tile can look numerically seamless while still failing in a 2x2 preview: the b
 - no internal seam line;
 - no one-sided border object;
 - no visible flat, blurry, or shifted edge band after tiling.
+- no hard center cross, halo, or fake border stripe in a simulated 2x2 tile preview.
 
 ## Why `repairSeams` Changed
 
@@ -43,6 +44,14 @@ The current repair blends three signals:
 - local high-frequency detail from neighboring interior pixels.
 
 This keeps edge continuity while preserving enough local texture for fabric printing.
+
+## 0.7.16 Success-Rate Changes
+
+- The quality gate now simulates a 2x2 tiled preview and measures the horizontal/vertical center seams directly.
+- A candidate can fail even when the opposite borders numerically match if the tiled preview would show a hard line, halo, flat stripe, or blurry transition band.
+- The task summary now includes a `平铺` score so visible preview risk is not hidden inside the edge score.
+- AI offset repair, local edge blending, and forced periodic repair now consider this tiled-preview score when deciding whether a result is repairable.
+- Tests include both a genuinely periodic texture that must pass and a matching-edge hard line that must fail.
 
 ## 0.7.13 Success-Rate Changes
 

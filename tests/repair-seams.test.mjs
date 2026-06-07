@@ -62,6 +62,33 @@ test("edge band artifact check rejects a flat border even when opposite edges ma
   assert.ok(bandCheck.worstScore > 18, `expected a visible band score; got ${bandCheck.worstScore}`);
 });
 
+test("tiled preview seam check allows genuinely periodic textured edges", () => {
+  const width = 128;
+  const height = 128;
+  const data = makePeriodicPattern(width, height);
+  const horizontal = measureTiledPreviewSeamCore(data, width, height, "horizontal");
+  const vertical = measureTiledPreviewSeamCore(data, width, height, "vertical");
+
+  assert.equal(horizontal.lineRisk, false, `periodic horizontal edge should pass; got ${JSON.stringify(horizontal)}`);
+  assert.equal(vertical.lineRisk, false, `periodic vertical edge should pass; got ${JSON.stringify(vertical)}`);
+  assert.ok(horizontal.worstScore < 14, `periodic horizontal seam should stay quiet; got ${horizontal.worstScore}`);
+  assert.ok(vertical.worstScore < 14, `periodic vertical seam should stay quiet; got ${vertical.worstScore}`);
+});
+
+test("tiled preview seam check rejects a matching hard line that appears only after tiling", () => {
+  const width = 128;
+  const height = 128;
+  const data = makePeriodicPattern(width, height);
+  paintMatchingLine(data, width, height, "horizontal", 2, [28, 24, 22]);
+
+  const oppositeEdgeScore = seamScore(data, width, height).horizontal;
+  const tiled = measureTiledPreviewSeamCore(data, width, height, "horizontal");
+
+  assert.ok(oppositeEdgeScore < 1, `opposite edges numerically match; got ${oppositeEdgeScore}`);
+  assert.equal(tiled.lineRisk, true, `matching hard line should be rejected in tiled preview; got ${JSON.stringify(tiled)}`);
+  assert.ok(tiled.worstScore > 16, `expected a visible tiled seam score; got ${tiled.worstScore}`);
+});
+
 function makeSyntheticPattern(width, height) {
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y += 1) {
@@ -83,6 +110,22 @@ function makeSyntheticPattern(width, height) {
   return data;
 }
 
+function makePeriodicPattern(width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const px = (Math.PI * 2 * x) / Math.max(1, width - 1);
+      const py = (Math.PI * 2 * y) / Math.max(1, height - 1);
+      data[i] = clamp(124 + Math.sin(px) * 26 + Math.cos(py * 2) * 14);
+      data[i + 1] = clamp(112 + Math.cos(py) * 24 + Math.sin(px * 3) * 10);
+      data[i + 2] = clamp(138 + Math.sin(px + py) * 18 + Math.cos(py * 2) * 9);
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
 function paintMatchingFlatBand(data, width, height, direction, band, color) {
   const horizontal = direction === "horizontal";
   for (let y = 0; y < height; y += 1) {
@@ -93,6 +136,23 @@ function paintMatchingFlatBand(data, width, height, direction, band, color) {
       data[i] = color[0];
       data[i + 1] = color[1];
       data[i + 2] = color[2];
+    }
+  }
+}
+
+function paintMatchingLine(data, width, height, direction, band, color) {
+  const horizontal = direction === "horizontal";
+  for (let d = 0; d < band; d += 1) {
+    for (let position = 0; position < (horizontal ? width : height); position += 1) {
+      const points = horizontal
+        ? [[position, d], [position, height - 1 - d]]
+        : [[d, position], [width - 1 - d, position]];
+      for (const [x, y] of points) {
+        const i = (y * width + x) * 4;
+        data[i] = color[0];
+        data[i + 1] = color[1];
+        data[i + 2] = color[2];
+      }
     }
   }
 }
@@ -208,6 +268,116 @@ function measureEdgeBandArtifactCore(data, width, height, direction) {
     shiftRatio,
     bandRisk: worstScore > 20 || score > 12 || (flatWindows >= 2 && flatRatio > 0.06) || (shiftWindows >= 2 && shiftRatio > 0.08),
   };
+}
+
+function measureTiledPreviewSeamCore(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const radius = Math.max(8, Math.min(42, Math.round(cross * 0.016)));
+  const innerGap = Math.max(radius * 2, Math.round(cross * 0.045));
+  const windowSize = Math.max(24, Math.min(112, Math.round(length / 24)));
+  const windowStep = Math.max(10, Math.round(windowSize * 0.5));
+  const sampleStep = Math.max(1, Math.round(windowSize / 18));
+  const depthStep = Math.max(1, Math.round(radius / 9));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let peakWindows = 0;
+  let haloWindows = 0;
+
+  for (let start = 0; start < length; start += windowStep) {
+    const end = Math.min(length, start + windowSize);
+    let centerJumpTotal = 0;
+    let nearJumpTotal = 0;
+    let haloShiftTotal = 0;
+    let edgeActivityTotal = 0;
+    let innerActivityTotal = 0;
+    let sampleCount = 0;
+
+    for (let along = start; along < end; along += sampleStep) {
+      const safeAlong = Math.min(length - 1, along);
+      centerJumpTotal += previewPixelDistance(data, width, safeAlong, -1, safeAlong, 0, horizontal, cross);
+      nearJumpTotal += (
+        previewPixelDistance(data, width, safeAlong, -2, safeAlong, -1, horizontal, cross) +
+        previewPixelDistance(data, width, safeAlong, 0, safeAlong, 1, horizontal, cross)
+      ) / 2;
+
+      for (let depth = 0; depth < radius; depth += depthStep) {
+        const edgeA = -1 - depth;
+        const edgeB = depth;
+        const innerA = -1 - depth - innerGap;
+        const innerB = depth + innerGap;
+        const nextEdgeA = edgeA - depthStep;
+        const nextEdgeB = edgeB + depthStep;
+        const nextInnerA = innerA - depthStep;
+        const nextInnerB = innerB + depthStep;
+
+        haloShiftTotal += (
+          previewPixelDistance(data, width, safeAlong, edgeA, safeAlong, innerA, horizontal, cross) +
+          previewPixelDistance(data, width, safeAlong, edgeB, safeAlong, innerB, horizontal, cross)
+        ) / 2;
+        edgeActivityTotal += (
+          previewPixelDistance(data, width, safeAlong, edgeA, safeAlong, nextEdgeA, horizontal, cross) +
+          previewPixelDistance(data, width, safeAlong, edgeB, safeAlong, nextEdgeB, horizontal, cross)
+        ) / 2;
+        innerActivityTotal += (
+          previewPixelDistance(data, width, safeAlong, innerA, safeAlong, nextInnerA, horizontal, cross) +
+          previewPixelDistance(data, width, safeAlong, innerB, safeAlong, nextInnerB, horizontal, cross)
+        ) / 2;
+        sampleCount += 1;
+      }
+    }
+
+    const edgeSamples = Math.max(1, Math.ceil((end - start) / sampleStep));
+    const centerJump = centerJumpTotal / edgeSamples;
+    const nearJump = nearJumpTotal / edgeSamples;
+    const haloShift = haloShiftTotal / Math.max(1, sampleCount);
+    const edgeActivity = edgeActivityTotal / Math.max(1, sampleCount);
+    const innerActivity = innerActivityTotal / Math.max(1, sampleCount);
+    const activityDrop = Math.max(0, innerActivity - edgeActivity);
+    const lineSpike = Math.max(0, centerJump - nearJump * 1.35 - innerActivity * 0.18);
+    const haloScore = Math.max(0, haloShift - innerActivity * 0.24) * 0.5 + activityDrop * 0.82;
+    const score = lineSpike * 0.9 + haloScore + Math.max(0, centerJump - edgeActivity * 0.7) * 0.18;
+
+    total += score;
+    count += 1;
+    worstScore = Math.max(worstScore, score);
+    if (lineSpike > 5.5 || centerJump > Math.max(11, nearJump * 2.2)) peakWindows += 1;
+    if (haloScore > 11 || activityDrop > 8) haloWindows += 1;
+  }
+
+  const score = total / Math.max(1, count);
+  const peakRatio = peakWindows / Math.max(1, count);
+  const haloRatio = haloWindows / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    peakWindows,
+    haloWindows,
+    peakRatio,
+    haloRatio,
+    lineRisk: (
+      worstScore > 18 ||
+      score > 10.5 ||
+      (peakWindows >= 2 && peakRatio > 0.07) ||
+      (haloWindows >= 2 && haloRatio > 0.08)
+    ),
+  };
+}
+
+function previewPixelDistance(data, width, alongA, crossA, alongB, crossB, horizontal, crossSize) {
+  const normalizedA = wrapIndex(Math.round(crossA), crossSize);
+  const normalizedB = wrapIndex(Math.round(crossB), crossSize);
+  const x1 = horizontal ? alongA : normalizedA;
+  const y1 = horizontal ? normalizedA : alongA;
+  const x2 = horizontal ? alongB : normalizedB;
+  const y2 = horizontal ? normalizedB : alongB;
+  return pixelDistance(data, width, x1, y1, x2, y2);
+}
+
+function wrapIndex(value, size) {
+  return ((value % size) + size) % size;
 }
 
 function pixelDistance(data, width, x1, y1, x2, y2) {
