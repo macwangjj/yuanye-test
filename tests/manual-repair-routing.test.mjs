@@ -102,6 +102,19 @@ test("AI offset repair mask opens common internal guide-line bands", () => {
   assert.match(maskSource, /internalGuideLineEditStrength\(x, width\)/);
 });
 
+test("AI offset repair mask makes seam bands transparent and protected areas opaque", () => {
+  const { drawOffsetRepairMask } = loadMaskRenderer();
+  const width = 1000;
+  const height = 1000;
+  const ctx = createMaskContext(width, height);
+
+  drawOffsetRepairMask(ctx, width, height);
+
+  assert.ok(alphaAt(ctx.imageData.data, width, 500, 500) < 8, "center offset seam should be fully editable");
+  assert.ok(alphaAt(ctx.imageData.data, width, 250, 120) < 100, "internal guide band should be editable");
+  assert.equal(alphaAt(ctx.imageData.data, width, 120, 120), 255, "off-seam textile area should stay protected");
+});
+
 test("AI offset repair prompt names internal guide-line redraws", () => {
   const buildOffsetRepairPrompt = compileFunction(appSource, "buildOffsetRepairPrompt");
   const prompt = buildOffsetRepairPrompt({ issues: ["内部接缝线明显，可修复", "局部花型叠加，可修复"] });
@@ -135,6 +148,35 @@ function loadMaskHelpers() {
   return Function(`"use strict"; ${source}
     return { internalGuideLineEditStrength };
   `)();
+}
+
+function loadMaskRenderer() {
+  const source = [
+    extractFunction(appSource, "seamEditStrength"),
+    extractFunction(appSource, "internalGuideLineEditStrength"),
+    extractFunction(appSource, "drawOffsetRepairMask"),
+  ].join("\n");
+  return Function(`"use strict"; ${source}
+    return { drawOffsetRepairMask };
+  `)();
+}
+
+function createMaskContext(width, height) {
+  return {
+    imageData: null,
+    createImageData(w, h) {
+      assert.equal(w, width);
+      assert.equal(h, height);
+      return { data: new Uint8ClampedArray(w * h * 4) };
+    },
+    putImageData(imageData) {
+      this.imageData = imageData;
+    },
+  };
+}
+
+function alphaAt(data, width, x, y) {
+  return data[(y * width + x) * 4 + 3];
 }
 
 function makeAiOnlyRepairableCheck() {
