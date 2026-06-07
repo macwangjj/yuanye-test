@@ -265,6 +265,15 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Non-structural failures such as low information density, center-heavy layouts, pre-tiled previews, frames, aspect distortion, low-resolution upscales, compression blocks, sharpen halos, and pasted motif overlaps still go straight to enhancement or regeneration.
 - Tests cover structural allow-listing, non-structural rejection, extreme-score rejection, and the generation-loop order before auto-regeneration.
 
+## 0.7.45 Attempt-Specific Regeneration Strategies
+
+- Automatic regeneration now changes composition strategy by attempt instead of repeating the same broad prompt with a longer failure list.
+- The second attempt uses an edge-first closure strategy for structural seam failures: design the four borders and corners first, then fill the interior.
+- The third attempt switches to a small/medium all-over repeat structure to reduce large motif edge risk, quiet borders, center-heavy layouts, and pasted overlaps.
+- The final retry uses a strict production-tile strategy: lower compositional ambition, output one portrait repeat unit, close all edges and corners first, and preserve native print detail.
+- Normal generation and fission generation both receive these attempt strategies, while the same commercial seam and print certification gates remain unchanged.
+- Tests cover attempt guidance, normal/fission prompt wiring, and the generation loop passing the attempt number into prompt construction.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

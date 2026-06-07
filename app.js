@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.44-test";
+const clientVersion = "0.7.45-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -677,6 +677,62 @@ function buildRetryGuidance(previousCheck = null) {
   ].join("\n");
 }
 
+function collectQualityIssueText(previousCheck = null) {
+  return [
+    previousCheck?.finalIssueType,
+    ...(Array.isArray(previousCheck?.issues) ? previousCheck.issues : []),
+  ]
+    .map((issue) => String(issue || "").trim())
+    .filter(Boolean)
+    .join("、");
+}
+
+function isStructuralSeamIssue(issueText = "") {
+  return /横档|竖档|回头没接|四角平铺交汇|平铺预览中心线|平铺边带|细线接缝|接缝过渡不自然|接缝细节发虚|边缘错位漂移|最终JPG边缘硬线/.test(issueText);
+}
+
+function buildAttemptStrategyGuidance(attempt = 1, previousCheck = null) {
+  const attemptNumber = Math.max(1, Number(attempt) || 1);
+  if (attemptNumber <= 1) return "";
+
+  const issueText = collectQualityIssueText(previousCheck);
+  const structuralSeam = isStructuralSeamIssue(issueText);
+  const overlapRisk = issueText.includes("花型元素叠加");
+  const layoutRisk = /花型分布过于集中|花型信息量不足|画框留白|输出比例拉伸/.test(issueText);
+  const clarityRisk = /低清放大|成品清晰度不足|印花细节密度不足|压缩块噪点|锐化光晕|色阶断层/.test(issueText);
+
+  if (attemptNumber === 2) {
+    const priority = structuralSeam
+      ? "这轮采用“边缘优先闭合”策略：先设计上下左右四条边和四个角，再填充画面内部。"
+      : "这轮采用“均衡满铺”策略：先确定全画面的重复节奏，再安排主体和辅助元素。";
+    return [
+      `本轮重生策略：第 ${attemptNumber} 次生成，不沿用上一轮构图。${priority}`,
+      "- 四条边必须有真实跨边延续的小中型花枝、藤蔓、线稿或织物纹理，不能把所有主体都缩进中心。",
+      "- 四角先闭合，角点附近只允许自然延展纹理和轻量辅助元素，禁止圆斑、十字结、硬补丁或重复小花。",
+      "- 主体元素可以有变化，但边缘坐标必须按 offset repeat 对齐；生成前内部检查 3×3 平铺。",
+      overlapRisk ? "- 上一轮有元素叠加风险：接缝附近改用自然穿插和留白，不要用贴片盖住断口。" : "- 不要通过模糊、淡化、镜像条带或纯色过渡来隐藏边缘。",
+    ].join("\n");
+  }
+
+  if (attemptNumber === 3) {
+    return [
+      `本轮重生策略：第 ${attemptNumber} 次生成，改用“小中型 all-over 连续纹样”策略。`,
+      "- 降低单个大主体比例，用多个小中型元素、细线、织物颗粒和辅助藤蔓形成稳定满铺节奏。",
+      "- 边缘区域必须像内部一样有清晰纹理和可打印细节，避免空边、静音边、糊边或平涂修补带。",
+      "- 不要让巨大花朵、佩斯利或动物主体压住接缝；需要跨边时只用可准确续接的细枝、叶片和纹理。",
+      layoutRisk ? "- 上一轮布局风险较高：视觉重量分散到四边和四角，禁止中心独大或外框式构图。" : "- 保持服装面料的自然呼吸感，但不能牺牲边缘闭合。",
+    ].join("\n");
+  }
+
+  return [
+    `本轮重生策略：第 ${attemptNumber} 次生成，进入“严格生产单元”策略，降低炫技构图，优先让四方连续通过。`,
+    "- 只输出一个完整竖版循环单元；不要输出预览网格、边框、拼贴展示或任何分割线。",
+    "- 采用可平铺的小中型连续纹理、花枝和线稿系统，四边四角先闭合，内部再补充层次。",
+    "- 任何接触边缘的线条、枝叶、颗粒、明暗和底纹都必须在对侧同坐标继续，不能断头或错位。",
+    clarityRisk ? "- 上一轮有清晰度/压缩/光晕风险：用原生高清细节，避免低清放大、块噪、过锐化和硬色带。" : "- 输出必须保持高清、细节密度足、适合 300dpi 面料打印。",
+  ].join("\n");
+}
+
 function retryGuidanceForIssue(issue) {
   const text = String(issue || "");
   if (text.includes("横档")) {
@@ -733,8 +789,10 @@ function retryGuidanceForIssue(issue) {
   return "总体重生：重新设计一个真实四方连续的单个循环单元，不要把上一张图裁切、镜像、模糊或简单拼贴。";
 }
 
-function buildPrompt(previousCheck = null) {
+function buildPrompt(previousCheck = null, attempt = 1) {
   const styleNote = els.styleNotes.value.trim() || "严格读取参考图的艺术风格、配色、笔触、元素气质、疏密节奏与高级面料感，不新增与参考图调性冲突的元素。";
+  const attemptGuidance = buildAttemptStrategyGuidance(attempt, previousCheck);
+  const strategyNote = attemptGuidance ? `\n\n${attemptGuidance}` : "";
   const retryGuidance = buildRetryGuidance(previousCheck);
   const retryNote = retryGuidance ? `\n\n${retryGuidance}` : "";
   return `请基于上传的参考图进行延展设计，生成可用于服装面料数码印花的大尺寸四方连续无缝循环图案。
@@ -768,13 +826,15 @@ function buildPrompt(previousCheck = null) {
 - 抽象纹理要保持流向连续；植物花卉要避免枝叶和花瓣在边缘断头；佩斯利、几何和民族纹样要避免规律错位、半个图形断裂或回头没有接上。
 - 不要出现一个巨大主体占据中心。
 - 保持稀疏、均衡、自然的服装面料图案节奏。
-- 边缘区域必须像画面内部一样自然，最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${retryNote}`;
+- 边缘区域必须像画面内部一样自然，最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${strategyNote}${retryNote}`;
 }
 
-function buildFissionPrompt(task, previousCheck = null) {
+function buildFissionPrompt(task, previousCheck = null, attempt = 1) {
   const styleNote = els.styleNotes.value.trim() || "保持原图的艺术风格、配色、笔触、元素气质、疏密节奏与高级面料感。";
   const strength = fissionStrengthProfile();
   const parentNote = task?.parentPatternCode ? `\n- 原图编号：${task.parentPatternCode}。新图要像同一系列的延展款，但不能只是复制、裁切、镜像或轻微调色。` : "";
+  const attemptGuidance = buildAttemptStrategyGuidance(attempt, previousCheck);
+  const strategyNote = attemptGuidance ? `\n\n${attemptGuidance}` : "";
   const retryGuidance = buildRetryGuidance(previousCheck);
   const retryNote = retryGuidance ? `\n\n${retryGuidance}` : "";
   return `请把上传图片作为已经成品化的无缝印花参考图，先反推它的核心提示词：风格、配色、笔触、材质质感、构图密度、面料气质和连续纹样规则；再基于这些核心提示词重新设计一张同系列但元素明显变化的新图案。
@@ -814,7 +874,7 @@ function buildFissionPrompt(task, previousCheck = null) {
 - 边缘元素必须真实跨边延续，不允许只在边缘淡化、镜像糊边、纯色过渡或模糊涂抹来遮盖接缝。
 - 生成时请优先采用 Offset repeat 工作法：先把潜在边缘接缝移动到画面中心进行自然重绘，再移回单元图；最终单元图边缘不应留下修补带。
 - 画面内部不能出现任何横向或竖向长直拼接带、重复块硬边、网格分割线或平铺预览边界。
-- 最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${retryNote}`;
+- 最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${strategyNote}${retryNote}`;
 }
 
 function fissionStrengthProfile() {
@@ -1034,7 +1094,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
         ? "正在上传参考图并生成四方连续图案。"
         : `检测未通过，正在自动重新生成 ${attempt - 1}/${maxAutoRegenerations}。`, attempt === 1 ? 28 : 34);
 
-      const payload = await requestGeneratedImage(task, lastCheck);
+      const payload = await requestGeneratedImage(task, lastCheck, attempt);
 
       phase = "显示成品预览";
       setTaskStatus(task, "生成中", "正在准备 JPG 下载文件。", 72);
@@ -1159,7 +1219,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
   }
 }
 
-async function requestGeneratedImage(task, previousCheck = null) {
+async function requestGeneratedImage(task, previousCheck = null, attempt = 1) {
   return await fetchJsonWithRetry("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1169,7 +1229,7 @@ async function requestGeneratedImage(task, previousCheck = null) {
         type: task.file.type,
         dataUrl: task.dataUrl,
       },
-      prompt: task.generationMode === "fission" ? buildFissionPrompt(task, previousCheck) : buildPrompt(previousCheck),
+      prompt: task.generationMode === "fission" ? buildFissionPrompt(task, previousCheck, attempt) : buildPrompt(previousCheck, attempt),
       size: els.size.value,
     }),
   }, {
