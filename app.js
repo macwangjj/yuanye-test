@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.54-test";
+const clientVersion = "0.7.57-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -2828,6 +2828,18 @@ async function runQaCheck(url, mode, output) {
 }
 
 function compactQaCheck(check, context = {}) {
+  const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
+  const peakRatio = Math.max(check.peakRatioH || 0, check.peakRatioV || 0);
+  const localScore = Math.max(check.localHorizontal?.score || 0, check.localVertical?.score || 0);
+  const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
+  const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
+  const internalScore = Math.max(check.internalHorizontal?.score || 0, check.internalVertical?.score || 0);
+  const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
+  const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const detailWorst = Math.max(check.detailHorizontal?.worstScore || 0, check.detailVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
+  const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
   return {
     status: "done",
     mode: context.mode || "full",
@@ -2850,6 +2862,22 @@ function compactQaCheck(check, context = {}) {
     dpiX: check.printSpec?.dpiX || null,
     dpiY: check.printSpec?.dpiY || null,
     issues: Array.isArray(check.issues) ? check.issues : [],
+    repairMetrics: {
+      edgeDominant,
+      peakRatio,
+      localScore,
+      localWorst,
+      borderWorst,
+      internalScore,
+      internalWorst,
+      bandWorst,
+      detailWorst,
+      tiledWorst,
+      cornerWorst,
+      driftWorst,
+      borderObjectRisk: Boolean(check.borderHorizontal?.objectRisk || check.borderVertical?.objectRisk),
+      driftRisk: Boolean(check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk),
+    },
     summary: seamCheckSummary(check),
   };
 }
@@ -2864,10 +2892,17 @@ function normalizeRepairableSeamIssue(check) {
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const internalScore = Math.max(check.internalHorizontal?.score || 0, check.internalVertical?.score || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
+  const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const detailWorst = Math.max(check.detailHorizontal?.worstScore || 0, check.detailVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
+  const borderObjectRisk = Boolean(check.borderHorizontal?.objectRisk || check.borderVertical?.objectRisk);
+  const driftRisk = Boolean(check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk);
   const internalLineRisk = Boolean(check.internalHorizontal?.lineRisk || check.internalVertical?.lineRisk || internalWorst > 16 || internalScore > 9);
   const cornerScore = Math.max(check.cornerScore || 0, check.tiledCorner?.score || 0);
   const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
   const cornerOnlyRisk = cornerScore > 7.2 || cornerWorst > 14 || check.tiledCorner?.junctionRisk;
+  const structuralSeamRisk = /横档未衔接|竖档未衔接|回头没接|接缝过渡不自然|边缘错位漂移/.test(issueText);
   const localizedOverlayRisk = issueText.includes("花型元素叠加") && (
     edgeDominant <= 28 &&
     peakRatio <= 0.24 &&
@@ -2876,10 +2911,37 @@ function normalizeRepairableSeamIssue(check) {
     internalScore <= 24 &&
     internalWorst <= 54 &&
     borderWorst <= 220 &&
-    !check.borderHorizontal?.objectRisk &&
-    !check.borderVertical?.objectRisk &&
-    !check.driftHorizontal?.driftRisk &&
-    !check.driftVertical?.driftRisk
+    !borderObjectRisk &&
+    !driftRisk
+  );
+  const softBorderObjectRisk = borderObjectRisk && (
+    borderWorst <= 72 &&
+    edgeDominant <= 18 &&
+    peakRatio <= 0.44 &&
+    localScore <= 18 &&
+    localWorst <= 48 &&
+    bandWorst <= 72 &&
+    detailWorst <= 72 &&
+    tiledWorst <= 72 &&
+    cornerWorst <= 66 &&
+    driftWorst <= 12 &&
+    !driftRisk
+  );
+  const nearMissStructuralRisk = structuralSeamRisk && !issueText.includes("花型元素叠加") && (
+    (check.score || 0) <= 32 &&
+    edgeDominant <= 30 &&
+    peakRatio <= 0.44 &&
+    localScore <= 36 &&
+    localWorst <= 88 &&
+    borderWorst <= 280 &&
+    internalWorst <= 120 &&
+    bandWorst <= 160 &&
+    detailWorst <= 150 &&
+    tiledWorst <= 120 &&
+    cornerWorst <= 88 &&
+    driftWorst <= 58 &&
+    (!borderObjectRisk || softBorderObjectRisk) &&
+    !driftRisk
   );
 
   if (/花型信息量不足|花型分布过于集中|疑似平铺预览输出|画框留白|输出比例拉伸|成品规格|低清放大|成品清晰度不足|印花细节密度不足|色阶断层|压缩块噪点|锐化光晕|最终JPG边缘硬线/.test(issueText)) {
@@ -2895,16 +2957,15 @@ function normalizeRepairableSeamIssue(check) {
     localScore <= 11 &&
     localWorst <= 23 &&
     borderWorst <= 96 &&
-    !check.borderHorizontal?.objectRisk &&
-    !check.borderVertical?.objectRisk &&
-    !check.driftHorizontal?.driftRisk &&
-    !check.driftVertical?.driftRisk
+    !borderObjectRisk &&
+    !driftRisk
   );
 
-  if (!localizedOverlayRisk && (!edgeClosureStable || (!internalLineRisk && !cornerOnlyRisk))) return check;
+  if (!localizedOverlayRisk && !nearMissStructuralRisk && (!edgeClosureStable || (!internalLineRisk && !cornerOnlyRisk))) return check;
 
   const repairableIssues = [];
   if (localizedOverlayRisk) repairableIssues.push("局部花型叠加，可修复");
+  if (nearMissStructuralRisk && !edgeClosureStable) repairableIssues.push("结构接缝轻度失配，可修复");
   if (internalLineRisk) repairableIssues.push("内部接缝线明显，可修复");
   if (cornerOnlyRisk) repairableIssues.push("四角平铺交汇明显，可修复");
   if (!repairableIssues.length) repairableIssues.push("接缝过渡不自然，可修复");

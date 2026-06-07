@@ -340,6 +340,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The standard generation, history, and download certification paths still call the full print-spec gate, so this tooling cannot certify undersized or non-300dpi artwork.
 - Bounded final JPG edge-hard-line failures are now marked as AI-repairable, so they route to Offset inpainting instead of being presented as terminal failures; extreme edge hard lines still remain unrepairable.
 
+## 0.7.57 Near-Miss Structural Seam Repair
+
+- QA rechecks on 24 historical seam failures showed a remaining cluster of low-score structural seams that were still labeled terminal even though their scores were within the AI Offset repair envelope.
+- Bounded structural failures now classify as `结构接缝轻度失配，可修复` when the seam score, edge dominance, border mismatch, local windows, tiled preview, corner, band/detail, and drift measurements are all within conservative limits.
+- Low-intensity border-object hits can enter AI Offset repair when border mismatch and drift stay low, preventing ornamental edge motifs from being treated as terminal failures.
+- Drift-risk seams, high-mismatch object-risk border seams, severe motif overlap, low-information layouts, frames, aspect failures, low-resolution/clarity artifacts, posterization, compression blocks, and sharpen halos remain regeneration-only.
+- This changes repair routing and human review language only; the commercial download gate still requires a fresh passing seam check, target pixel dimensions, 300dpi metadata, and complete certification.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

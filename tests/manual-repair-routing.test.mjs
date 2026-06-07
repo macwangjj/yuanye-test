@@ -71,6 +71,62 @@ test("closed edges with internal guide lines are classified as repairable, not t
   assert.deepEqual(check.issues, ["内部接缝线明显，可修复", "四角平铺交汇明显，可修复"]);
 });
 
+test("near-miss structural seams are classified as AI-repairable", () => {
+  const { shouldAiOffsetRepair, shouldOfferTaskRepair } = loadRepairAvailabilityHelpers();
+  const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
+  const check = makeNearMissStructuralSeamCheck();
+
+  normalizeRepairableSeamIssue(check);
+
+  assert.equal(check.repairability, "repairable");
+  assert.equal(check.finalIssueType, "结构接缝轻度失配，可修复");
+  assert.equal(shouldAiOffsetRepair(check), true, "near-miss structural seams should route to AI offset repair");
+  assert.equal(shouldOfferTaskRepair({ aiRepairAttempts: 0 }, check), true, "manual repair should stay available");
+});
+
+test("near-miss structural seams allow soft border object risk", () => {
+  const { shouldAiOffsetRepair } = loadRepairAvailabilityHelpers();
+  const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
+  const check = {
+    ...makeNearMissStructuralSeamCheck(),
+    peakRatioH: 0.42,
+    peakRatioV: 0.37,
+    borderHorizontal: { worstMismatch: 55, objectRisk: true },
+    borderVertical: { worstMismatch: 52, objectRisk: false },
+    localVertical: { score: 14, worstScore: 38 },
+    internalHorizontal: { score: 43, worstScore: 47, lineRisk: false },
+    bandHorizontal: { worstScore: 38 },
+    bandVertical: { worstScore: 40 },
+    tiledCorner: { score: 13, worstScore: 56, junctionRisk: false },
+    driftHorizontal: { driftRisk: false, worstScore: 6 },
+    driftVertical: { driftRisk: false, worstScore: 5 },
+  };
+
+  normalizeRepairableSeamIssue(check);
+
+  assert.equal(check.repairability, "repairable");
+  assert.equal(check.finalIssueType, "结构接缝轻度失配，可修复");
+  assert.equal(shouldAiOffsetRepair(check), true);
+});
+
+test("near-miss structural reclassification still rejects drift or object-risk seams", () => {
+  const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
+  const driftCheck = {
+    ...makeNearMissStructuralSeamCheck(),
+    driftHorizontal: { driftRisk: true, worstScore: 72 },
+  };
+  const objectCheck = {
+    ...makeNearMissStructuralSeamCheck(),
+    borderVertical: { worstMismatch: 120, objectRisk: true },
+  };
+
+  normalizeRepairableSeamIssue(driftCheck);
+  normalizeRepairableSeamIssue(objectCheck);
+
+  assert.equal(driftCheck.repairability, "unrepairable");
+  assert.equal(objectCheck.repairability, "unrepairable");
+});
+
 test("hard visual failures are not reclassified as repairable internal lines", () => {
   const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
   const check = {
@@ -257,6 +313,36 @@ function makeFinalEdgeHardLineCheck() {
     driftVertical: { worstScore: 24 },
     mirrorHorizontal: { worstScore: 0, mirrorRisk: false },
     mirrorVertical: { worstScore: 0, mirrorRisk: false },
+  };
+}
+
+function makeNearMissStructuralSeamCheck() {
+  return {
+    passed: false,
+    score: 17.86,
+    horizontalScore: 7.1,
+    verticalScore: 11.2,
+    cornerScore: 17.1,
+    peakRatioH: 0.18,
+    peakRatioV: 0.16,
+    repairability: "unrepairable",
+    finalIssueType: "横档未衔接，不可修复",
+    issues: ["横档未衔接，不可修复", "竖档未衔接，不可修复", "回头没接，不可修复"],
+    borderHorizontal: { worstMismatch: 132, objectRisk: false },
+    borderVertical: { worstMismatch: 128, objectRisk: false },
+    localHorizontal: { score: 18, worstScore: 45 },
+    localVertical: { score: 20, worstScore: 48 },
+    internalHorizontal: { score: 8, worstScore: 34, lineRisk: false },
+    internalVertical: { score: 7, worstScore: 31, lineRisk: false },
+    bandHorizontal: { worstScore: 74 },
+    bandVertical: { worstScore: 78 },
+    detailHorizontal: { worstScore: 42 },
+    detailVertical: { worstScore: 44 },
+    tiledHorizontal: { worstScore: 62 },
+    tiledVertical: { worstScore: 64 },
+    tiledCorner: { score: 9, worstScore: 24, junctionRisk: false },
+    driftHorizontal: { driftRisk: false, worstScore: 22 },
+    driftVertical: { driftRisk: false, worstScore: 24 },
   };
 }
 
