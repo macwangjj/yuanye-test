@@ -50,14 +50,26 @@ test("manual AI follow-up preserves the commercial download gate", () => {
 
 test("bounded final JPG edge hard lines are routed as AI-repairable", () => {
   const { applyFullSizeEdgeCheck } = loadFinalEdgeHelpers();
-  const check = makeFinalEdgeHardLineCheck();
+  const check = makeBoundedFinalEdgeHardLineCheck();
 
-  applyFullSizeEdgeCheck(check, { edgeRisk: true, score: 110 });
+  applyFullSizeEdgeCheck(check, { edgeRisk: true, score: 72, peakRatio: 0.38 });
 
   assert.equal(check.passed, false, "edge hard line should still fail certification");
   assert.equal(check.repairability, "repairable");
   assert.equal(check.finalIssueType, "最终JPG边缘硬线，可修复");
   assert.equal(check.issues[0], "最终JPG边缘硬线，可修复");
+});
+
+test("severe final JPG edge hard lines stay regeneration-only", () => {
+  const { applyFullSizeEdgeCheck } = loadFinalEdgeHelpers();
+  const check = makeSevereFinalEdgeHardLineCheck();
+
+  applyFullSizeEdgeCheck(check, { edgeRisk: true, score: 86, peakRatio: 0.58 });
+
+  assert.equal(check.passed, false);
+  assert.equal(check.repairability, "unrepairable");
+  assert.equal(check.finalIssueType, "最终JPG边缘硬线，不可修复");
+  assert.equal(check.issues[0], "最终JPG边缘硬线，不可修复");
 });
 
 test("closed edges with internal guide lines are classified as repairable, not terminal failures", () => {
@@ -233,6 +245,7 @@ function loadFinalEdgeHelpers() {
   const source = [
     extractFunction(appSource, "seamRating"),
     extractFunction(appSource, "shouldAiOffsetRepair"),
+    extractFunction(appSource, "isBoundedFinalEdgeHardLine"),
     extractFunction(appSource, "applyFullSizeEdgeCheck"),
   ].join("\n");
   return Function(`"use strict"; ${source}
@@ -286,7 +299,39 @@ function makeAiOnlyRepairableCheck() {
   };
 }
 
-function makeFinalEdgeHardLineCheck() {
+function makeBoundedFinalEdgeHardLineCheck() {
+  return {
+    passed: false,
+    score: 17.8,
+    horizontalScore: 22.6,
+    verticalScore: 19.4,
+    cornerScore: 31.2,
+    peakRatioH: 0.46,
+    peakRatioV: 0.52,
+    repairability: "unrepairable",
+    finalIssueType: "横档未衔接，不可修复",
+    issues: ["横档未衔接，不可修复", "竖档未衔接，不可修复"],
+    borderHorizontal: { worstMismatch: 72, objectRisk: true },
+    borderVertical: { worstMismatch: 64, objectRisk: false },
+    localHorizontal: { score: 22, worstScore: 42 },
+    localVertical: { score: 19, worstScore: 38 },
+    internalHorizontal: { worstScore: 48 },
+    internalVertical: { worstScore: 36 },
+    bandHorizontal: { worstScore: 34 },
+    bandVertical: { worstScore: 30 },
+    detailHorizontal: { worstScore: 42 },
+    detailVertical: { worstScore: 40 },
+    tiledHorizontal: { worstScore: 64 },
+    tiledVertical: { worstScore: 58 },
+    tiledCorner: { worstScore: 42 },
+    driftHorizontal: { driftRisk: false, worstScore: 12 },
+    driftVertical: { driftRisk: false, worstScore: 10 },
+    mirrorHorizontal: { worstScore: 0, mirrorRisk: false },
+    mirrorVertical: { worstScore: 0, mirrorRisk: false },
+  };
+}
+
+function makeSevereFinalEdgeHardLineCheck() {
   return {
     passed: false,
     score: 63.57,

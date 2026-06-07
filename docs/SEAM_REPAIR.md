@@ -348,6 +348,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Drift-risk seams, high-mismatch object-risk border seams, severe motif overlap, low-information layouts, frames, aspect failures, low-resolution/clarity artifacts, posterization, compression blocks, and sharpen halos remain regeneration-only.
 - This changes repair routing and human review language only; the commercial download gate still requires a fresh passing seam check, target pixel dimensions, 300dpi metadata, and complete certification.
 
+## 0.7.58 Bounded Final-Edge Repair
+
+- Final exported JPG hard-edge lines are now only marked `最终JPG边缘硬线，可修复` when the underlying seam is still inside a bounded AI Offset repair envelope.
+- Severe structural drift, high border-object mismatch, heavy tiled-preview lines, large local breaks, and high corner mismatch now remain `最终JPG边缘硬线，不可修复` so the pipeline regenerates or tries strict candidates instead of spending repair attempts on poor bases.
+- QA rechecks on 19 historical overlap failures changed routing from 19/19 repairable to 6 repairable and 13 regeneration-only, which better separates local edge encoding defects from true motif/edge misalignment.
+- The commercial download gate remains unchanged: a final-edge repair candidate must still pass the full seam, print-size, 300dpi, clarity, and certification checks before any JPG download is enabled.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

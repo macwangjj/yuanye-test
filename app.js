@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.57-test";
+const clientVersion = "0.7.58-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -5569,13 +5569,17 @@ function applyFullSizeEdgeCheck(check, fullSizeEdge) {
 
   const repairableIssue = "最终JPG边缘硬线，可修复";
   const unrepairableIssue = "最终JPG边缘硬线，不可修复";
-  const issue = shouldAiOffsetRepair({
+  const finalEdgeCandidate = {
     ...check,
     fullSizeEdge,
     issues: [repairableIssue, ...(check.issues || [])],
     finalIssueType: repairableIssue,
     repairability: "repairable",
-  }) ? repairableIssue : unrepairableIssue;
+  };
+  const issue = (
+    isBoundedFinalEdgeHardLine(check, fullSizeEdge) &&
+    shouldAiOffsetRepair(finalEdgeCandidate)
+  ) ? repairableIssue : unrepairableIssue;
 
   check.issues = [issue, ...check.issues.filter((item) => item !== repairableIssue && item !== unrepairableIssue)];
   check.passed = false;
@@ -5587,6 +5591,43 @@ function applyFullSizeEdgeCheck(check, fullSizeEdge) {
   check.finalIssueType = issue;
   check.rating = seamRating(check);
   return check;
+}
+
+function isBoundedFinalEdgeHardLine(check, fullSizeEdge) {
+  if (!check || !fullSizeEdge?.edgeRisk) return false;
+  const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
+  const peakRatio = Math.max(check.peakRatioH || 0, check.peakRatioV || 0);
+  const localScore = Math.max(check.localHorizontal?.score || 0, check.localVertical?.score || 0);
+  const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
+  const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
+  const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
+  const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const detailWorst = Math.max(check.detailHorizontal?.worstScore || 0, check.detailVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
+  const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
+  const driftRisk = Boolean(check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk);
+  const borderObjectRisk = Boolean(check.borderHorizontal?.objectRisk || check.borderVertical?.objectRisk);
+  const softObjectRisk = borderObjectRisk && borderWorst <= 110 && localWorst <= 58 && edgeDominant <= 33;
+
+  return (
+    (check.score || 0) <= 28 &&
+    (fullSizeEdge.score || 0) <= 120 &&
+    (fullSizeEdge.peakRatio || 0) <= 0.72 &&
+    edgeDominant <= 34 &&
+    peakRatio <= 0.76 &&
+    localScore <= 34 &&
+    localWorst <= 92 &&
+    borderWorst <= 132 &&
+    internalWorst <= 142 &&
+    bandWorst <= 76 &&
+    detailWorst <= 96 &&
+    tiledWorst <= 112 &&
+    cornerWorst <= 66 &&
+    driftWorst <= 38 &&
+    (!driftRisk || driftWorst <= 24) &&
+    (!borderObjectRisk || softObjectRisk)
+  );
 }
 
 function downloadJpg(task) {
