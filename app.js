@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.30-test";
+const clientVersion = "0.7.31-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -497,7 +497,8 @@ function recordHasCertifiedDownload(record) {
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
     typeof gate.preTiledPreviewScore === "number" &&
-    typeof gate.textureDensityScore === "number"
+    typeof gate.textureDensityScore === "number" &&
+    typeof gate.outerFrameScore === "number"
   );
 }
 
@@ -564,6 +565,8 @@ function buildPrintCertification(task, actionType = "generate") {
       preTiledDuplicatePairs: typeof check.preTiledPreview?.duplicatePairs === "number" ? check.preTiledPreview.duplicatePairs : null,
       textureDensityScore: typeof check.textureDensity?.textureDensityScore === "number" ? check.textureDensity.textureDensityScore : null,
       fineDetailRatio: typeof check.textureDensity?.fineDetailRatio === "number" ? check.textureDensity.fineDetailRatio : null,
+      outerFrameScore: typeof check.outerFrame?.score === "number" ? check.outerFrame.score : null,
+      outerFrameRiskSides: typeof check.outerFrame?.riskSides === "number" ? check.outerFrame.riskSides : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
     },
   };
@@ -1457,7 +1460,7 @@ function shouldHybridSeamRepair(check) {
 
 function shouldEdgeBlendRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出") || issue.includes("画框留白"))) return false;
   if (check.issues?.some((issue) => issue.includes("镜像轴痕"))) return false;
   if (check.issues?.some((issue) => issue.includes("花型元素叠加") || issue.includes("回头没接"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
@@ -1492,7 +1495,7 @@ function shouldEdgeBlendRepair(check) {
 
 function shouldAiOffsetRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出") || issue.includes("画框留白"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
@@ -1520,7 +1523,7 @@ function shouldAiOffsetRepair(check) {
 
 function shouldForcePeriodicRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出") || issue.includes("画框留白"))) return false;
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
@@ -1618,6 +1621,7 @@ function seamCheckSummary(check) {
     `平铺 ${Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0).toFixed(2)}`,
     `交汇 ${Number(check.tiledCorner?.score || 0).toFixed(2)}`,
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
+    `边框 ${Number(check.outerFrame?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     `密度 ${(Number(check.textureDensity?.fineDetailRatio || 0) * 100).toFixed(0)}%`,
@@ -1641,6 +1645,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("花型信息量不足，不可修复")) return "花型信息量不足，不可修复";
   if (check.issues?.includes("花型分布过于集中，不可修复")) return "花型分布过于集中，不可修复";
   if (check.issues?.includes("疑似平铺预览输出，不可修复")) return "疑似平铺预览输出，不可修复";
+  if (check.issues?.includes("画框留白边界，不可修复")) return "画框留白边界，不可修复";
   if (check.issues?.includes("镜像轴痕明显，可修复")) return "镜像轴痕明显，可修复";
   if (check.issues?.includes("印花细节密度不足，可增强")) return "印花细节密度不足，可增强";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
@@ -2077,6 +2082,7 @@ function measureSeamQuality(ctx, width, height) {
   const borderVertical = measureBorderObjectRisk(data, width, height, "vertical");
   const bandHorizontal = measureEdgeBandArtifact(data, width, height, "horizontal");
   const bandVertical = measureEdgeBandArtifact(data, width, height, "vertical");
+  const outerFrame = measureOuterFrameArtifact(data, width, height);
   const detailHorizontal = measureSeamDetailLoss(data, width, height, "horizontal");
   const detailVertical = measureSeamDetailLoss(data, width, height, "vertical");
   const tiledHorizontal = measureTiledPreviewSeam(data, width, height, "horizontal");
@@ -2137,6 +2143,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && richness.lowInformationRisk) issues.push("花型信息量不足，不可修复");
   if (!issues.length && layoutBalance.centerDominanceRisk) issues.push("花型分布过于集中，不可修复");
   if (!issues.length && preTiledPreviewRisk) issues.push("疑似平铺预览输出，不可修复");
+  if (!issues.length && outerFrame.frameRisk) issues.push("画框留白边界，不可修复");
   if (!issues.length && mirrorRisk) issues.push("镜像轴痕明显，可修复");
   if (!issues.length && driftRisk) issues.push("边缘错位漂移，可修复");
   if (!issues.length && cornerJunctionRisk) issues.push("四角平铺交汇明显，可修复");
@@ -2150,7 +2157,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
-  const score = horizontalScore * 0.15 + verticalScore * 0.15 + cornerScore * 0.07 + maxLocalScore * 0.08 + maxInternalScore * 0.08 + maxBandScore * 0.08 + maxDetailLossScore * 0.08 + maxTiledScore * 0.09 + tiledCorner.score * 0.06 + maxDriftScore * 0.07 + maxMirrorScore * 0.06 + preTiledPreview.score * 0.03;
+  const score = horizontalScore * 0.14 + verticalScore * 0.14 + cornerScore * 0.07 + maxLocalScore * 0.08 + maxInternalScore * 0.08 + maxBandScore * 0.08 + maxDetailLossScore * 0.08 + maxTiledScore * 0.09 + tiledCorner.score * 0.06 + maxDriftScore * 0.07 + maxMirrorScore * 0.06 + preTiledPreview.score * 0.03 + outerFrame.score * 0.02;
   let repairability = issues.some((issue) => issue.includes("不可修复"))
     ? "unrepairable"
     : issues.some((issue) => issue.includes("可修复"))
@@ -2181,6 +2188,7 @@ function measureSeamQuality(ctx, width, height) {
     maxMirrorWorst <= 13 &&
     !mirrorRisk &&
     !preTiledPreviewRisk &&
+    !outerFrame.frameRisk &&
     !richness.lowInformationRisk &&
     !textureDensity.lowTextureDensityRisk &&
     !layoutBalance.centerDominanceRisk &&
@@ -2208,6 +2216,7 @@ function measureSeamQuality(ctx, width, height) {
     borderVertical,
     bandHorizontal,
     bandVertical,
+    outerFrame,
     detailHorizontal,
     detailVertical,
     tiledHorizontal,
@@ -2593,6 +2602,91 @@ function measureEdgeBandArtifact(data, width, height, direction) {
       (flatWindows >= 2 && flatRatio > 0.06) ||
       (shiftWindows >= 2 && shiftRatio > 0.08)
     ),
+  };
+}
+
+function measureOuterFrameArtifact(data, width, height) {
+  const size = Math.min(width, height);
+  const frameDepth = Math.max(8, Math.min(72, Math.round(size * 0.055)));
+  const innerOffset = Math.max(frameDepth * 2, Math.round(size * 0.14));
+  const sideStats = [
+    measureFrameSide(data, width, height, 0, 0, width, frameDepth, 0, innerOffset, width, Math.min(height, innerOffset + frameDepth)),
+    measureFrameSide(data, width, height, 0, height - frameDepth, width, height, 0, Math.max(0, height - innerOffset - frameDepth), width, Math.max(0, height - innerOffset)),
+    measureFrameSide(data, width, height, 0, 0, frameDepth, height, innerOffset, 0, Math.min(width, innerOffset + frameDepth), height),
+    measureFrameSide(data, width, height, width - frameDepth, 0, width, height, Math.max(0, width - innerOffset - frameDepth), 0, Math.max(0, width - innerOffset), height),
+  ];
+  const riskSides = sideStats.filter((side) => side.risk).length;
+  const score = sideStats.reduce((sum, side) => sum + side.score, 0) / Math.max(1, sideStats.length);
+  const worstScore = Math.max(...sideStats.map((side) => side.score));
+  const averageEdgeActivity = sideStats.reduce((sum, side) => sum + side.edge.activity, 0) / Math.max(1, sideStats.length);
+  const averageInnerActivity = sideStats.reduce((sum, side) => sum + side.inner.activity, 0) / Math.max(1, sideStats.length);
+
+  return {
+    score,
+    worstScore,
+    riskSides,
+    averageEdgeActivity,
+    averageInnerActivity,
+    sides: sideStats,
+    frameRisk: riskSides >= 3 || (riskSides >= 2 && score > 9.5 && worstScore > 14),
+  };
+}
+
+function measureFrameSide(data, width, height, ex0, ey0, ex1, ey1, ix0, iy0, ix1, iy1) {
+  const edge = measureFrameRegion(data, width, height, ex0, ey0, ex1, ey1);
+  const inner = measureFrameRegion(data, width, height, ix0, iy0, ix1, iy1);
+  const activityDrop = Math.max(0, inner.activity - edge.activity);
+  const flatDrop = Math.max(0, inner.lumStd - edge.lumStd);
+  const lumShift = Math.abs(edge.lumMean - inner.lumMean);
+  const extremeFlatEdge = edge.lumStd < 4.5 && (edge.lumMean > 226 || edge.lumMean < 28);
+  const frameLike = (
+    inner.activity > 4.6 &&
+    edge.activity < Math.max(2.8, inner.activity * 0.46) &&
+    edge.lumStd < Math.max(8, inner.lumStd * 0.72) &&
+    (lumShift > 10 || activityDrop > 4.8 || extremeFlatEdge)
+  );
+  const score = activityDrop * 0.86 + flatDrop * 0.32 + Math.max(0, lumShift - 8) * 0.38 + (extremeFlatEdge ? 8 : 0);
+
+  return {
+    edge,
+    inner,
+    activityDrop,
+    flatDrop,
+    lumShift,
+    score,
+    risk: frameLike && score > 6.8,
+  };
+}
+
+function measureFrameRegion(data, width, height, x0, y0, x1, y1) {
+  const left = Math.max(1, Math.min(width - 2, Math.round(x0)));
+  const top = Math.max(1, Math.min(height - 2, Math.round(y0)));
+  const right = Math.max(left + 1, Math.min(width - 1, Math.round(x1)));
+  const bottom = Math.max(top + 1, Math.min(height - 1, Math.round(y1)));
+  const step = Math.max(1, Math.round(Math.max(right - left, bottom - top) / 96));
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let activityTotal = 0;
+  let count = 0;
+
+  for (let y = top; y < bottom; y += step) {
+    for (let x = left; x < right; x += step) {
+      const luminance = pixelLuminance(data, width, x, y);
+      const detail = pixelDetailAt(data, width, height, x, y);
+      lumTotal += luminance;
+      lumSquareTotal += luminance * luminance;
+      activityTotal += detail.gradient * 0.48 + detail.detail * 0.88;
+      count += 1;
+    }
+  }
+
+  const lumMean = lumTotal / Math.max(1, count);
+  const lumStd = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - lumMean * lumMean));
+  const activity = activityTotal / Math.max(1, count);
+  return {
+    lumMean,
+    lumStd,
+    activity,
   };
 }
 

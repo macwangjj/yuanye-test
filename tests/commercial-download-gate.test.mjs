@@ -40,6 +40,7 @@ test("history and batch downloads only include certified records", () => {
   assert.match(recordCertificationFunction, /typeof gate\.mirrorAxisScore === "number"/, "history certification must require the mirror-axis gate");
   assert.match(recordCertificationFunction, /typeof gate\.preTiledPreviewScore === "number"/, "history certification must require the pre-tiled preview gate");
   assert.match(recordCertificationFunction, /typeof gate\.textureDensityScore === "number"/, "history certification must require the print texture-density gate");
+  assert.match(recordCertificationFunction, /typeof gate\.outerFrameScore === "number"/, "history certification must require the outer-frame gate");
   assert.match(selectedZipFunction, /item\.certified === true/, "batch zip should only include explicitly certified entries");
   assert.match(historyTemplateFunction, /data-certified="\$\{certified\}"/, "history checkbox should carry certification state");
   assert.match(historyTemplateFunction, /disabled/, "uncertified history records should render a disabled download control");
@@ -62,6 +63,7 @@ test("history certification rejects stale or partial metadata", () => {
         mirrorAxisScore: 0.9,
         preTiledPreviewScore: 0.4,
         textureDensityScore: 8.5,
+        outerFrameScore: 0.8,
       },
     },
   };
@@ -76,7 +78,7 @@ test("history certification rejects stale or partial metadata", () => {
         qualityPassed: true,
       },
     },
-  }), false, "records missing the seam detail-loss, richness, layout, mirror-axis, pre-tiled, and texture-density gates should not be downloadable");
+  }), false, "records missing the seam detail-loss, richness, layout, mirror-axis, pre-tiled, texture-density, and outer-frame gates should not be downloadable");
   assert.equal(recordHasCertifiedDownload({
     imageUrl: "/history/old.jpg",
     qualityPassed: true,
@@ -98,6 +100,7 @@ test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /mirrorAxisScore: Math\.max\(check\.mirrorHorizontal\?\.score \|\| 0, check\.mirrorVertical\?\.score \|\| 0\)/, "certification should retain mirror-axis score");
   assert.match(appSource, /preTiledPreviewScore: typeof check\.preTiledPreview\?\.score === "number" \? check\.preTiledPreview\.score : null/, "certification should retain pre-tiled preview score");
   assert.match(appSource, /textureDensityScore: typeof check\.textureDensity\?\.textureDensityScore === "number" \? check\.textureDensity\.textureDensityScore : null/, "certification should retain texture-density score");
+  assert.match(appSource, /outerFrameScore: typeof check\.outerFrame\?\.score === "number" \? check\.outerFrame\.score : null/, "certification should retain outer-frame score");
   assert.match(appSource, /driftScore: Math\.max\(check\.driftHorizontal\?\.score \|\| 0, check\.driftVertical\?\.score \|\| 0\)/, "certification should retain edge-drift score");
   assert.match(serverSource, /certification: payload\.certification \|\| null/, "server should persist certification metadata");
 });

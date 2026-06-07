@@ -62,6 +62,19 @@ test("edge band artifact check rejects a flat border even when opposite edges ma
   assert.ok(bandCheck.worstScore > 18, `expected a visible band score; got ${bandCheck.worstScore}`);
 });
 
+test("outer frame check rejects wide print margins", () => {
+  const width = 160;
+  const height = 160;
+  const allover = makeSharpPrintPattern(width, height);
+  const framed = makeFramedPrintPattern(width, height, 18, [238, 232, 216]);
+  const alloverFrame = measureOuterFrameArtifactCore(allover, width, height);
+  const framedCheck = measureOuterFrameArtifactCore(framed, width, height);
+
+  assert.equal(alloverFrame.frameRisk, false, `all-over textile should not be rejected as a frame; got ${JSON.stringify(alloverFrame)}`);
+  assert.equal(framedCheck.frameRisk, true, `wide print margin should be rejected; got ${JSON.stringify(framedCheck)}`);
+  assert.ok(framedCheck.riskSides >= 3, `wide frame should affect most sides; got ${framedCheck.riskSides}`);
+});
+
 test("tiled preview seam check allows genuinely periodic textured edges", () => {
   const width = 128;
   const height = 128;
@@ -270,6 +283,21 @@ function makeFlatPrint(width, height, color) {
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      data[i] = color[0];
+      data[i + 1] = color[1];
+      data[i + 2] = color[2];
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function makeFramedPrintPattern(width, height, frame, color) {
+  const data = makeSharpPrintPattern(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (x >= frame && x < width - frame && y >= frame && y < height - frame) continue;
       const i = (y * width + x) * 4;
       data[i] = color[0];
       data[i + 1] = color[1];
@@ -619,6 +647,91 @@ function measureEdgeBandArtifactCore(data, width, height, direction) {
     flatRatio,
     shiftRatio,
     bandRisk: worstScore > 20 || score > 12 || (flatWindows >= 2 && flatRatio > 0.06) || (shiftWindows >= 2 && shiftRatio > 0.08),
+  };
+}
+
+function measureOuterFrameArtifactCore(data, width, height) {
+  const size = Math.min(width, height);
+  const frameDepth = Math.max(8, Math.min(72, Math.round(size * 0.055)));
+  const innerOffset = Math.max(frameDepth * 2, Math.round(size * 0.14));
+  const sideStats = [
+    measureFrameSideCore(data, width, height, 0, 0, width, frameDepth, 0, innerOffset, width, Math.min(height, innerOffset + frameDepth)),
+    measureFrameSideCore(data, width, height, 0, height - frameDepth, width, height, 0, Math.max(0, height - innerOffset - frameDepth), width, Math.max(0, height - innerOffset)),
+    measureFrameSideCore(data, width, height, 0, 0, frameDepth, height, innerOffset, 0, Math.min(width, innerOffset + frameDepth), height),
+    measureFrameSideCore(data, width, height, width - frameDepth, 0, width, height, Math.max(0, width - innerOffset - frameDepth), 0, Math.max(0, width - innerOffset), height),
+  ];
+  const riskSides = sideStats.filter((side) => side.risk).length;
+  const score = sideStats.reduce((sum, side) => sum + side.score, 0) / Math.max(1, sideStats.length);
+  const worstScore = Math.max(...sideStats.map((side) => side.score));
+  const averageEdgeActivity = sideStats.reduce((sum, side) => sum + side.edge.activity, 0) / Math.max(1, sideStats.length);
+  const averageInnerActivity = sideStats.reduce((sum, side) => sum + side.inner.activity, 0) / Math.max(1, sideStats.length);
+
+  return {
+    score,
+    worstScore,
+    riskSides,
+    averageEdgeActivity,
+    averageInnerActivity,
+    sides: sideStats,
+    frameRisk: riskSides >= 3 || (riskSides >= 2 && score > 9.5 && worstScore > 14),
+  };
+}
+
+function measureFrameSideCore(data, width, height, ex0, ey0, ex1, ey1, ix0, iy0, ix1, iy1) {
+  const edge = measureFrameRegionCore(data, width, height, ex0, ey0, ex1, ey1);
+  const inner = measureFrameRegionCore(data, width, height, ix0, iy0, ix1, iy1);
+  const activityDrop = Math.max(0, inner.activity - edge.activity);
+  const flatDrop = Math.max(0, inner.lumStd - edge.lumStd);
+  const lumShift = Math.abs(edge.lumMean - inner.lumMean);
+  const extremeFlatEdge = edge.lumStd < 4.5 && (edge.lumMean > 226 || edge.lumMean < 28);
+  const frameLike = (
+    inner.activity > 4.6 &&
+    edge.activity < Math.max(2.8, inner.activity * 0.46) &&
+    edge.lumStd < Math.max(8, inner.lumStd * 0.72) &&
+    (lumShift > 10 || activityDrop > 4.8 || extremeFlatEdge)
+  );
+  const score = activityDrop * 0.86 + flatDrop * 0.32 + Math.max(0, lumShift - 8) * 0.38 + (extremeFlatEdge ? 8 : 0);
+
+  return {
+    edge,
+    inner,
+    activityDrop,
+    flatDrop,
+    lumShift,
+    score,
+    risk: frameLike && score > 6.8,
+  };
+}
+
+function measureFrameRegionCore(data, width, height, x0, y0, x1, y1) {
+  const left = Math.max(1, Math.min(width - 2, Math.round(x0)));
+  const top = Math.max(1, Math.min(height - 2, Math.round(y0)));
+  const right = Math.max(left + 1, Math.min(width - 1, Math.round(x1)));
+  const bottom = Math.max(top + 1, Math.min(height - 1, Math.round(y1)));
+  const step = Math.max(1, Math.round(Math.max(right - left, bottom - top) / 96));
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let activityTotal = 0;
+  let count = 0;
+
+  for (let y = top; y < bottom; y += step) {
+    for (let x = left; x < right; x += step) {
+      const luminance = pixelLuminance(data, width, x, y);
+      const detail = pixelDetailAt(data, width, height, x, y);
+      lumTotal += luminance;
+      lumSquareTotal += luminance * luminance;
+      activityTotal += detail.gradient * 0.48 + detail.detail * 0.88;
+      count += 1;
+    }
+  }
+
+  const lumMean = lumTotal / Math.max(1, count);
+  const lumStd = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - lumMean * lumMean));
+  const activity = activityTotal / Math.max(1, count);
+  return {
+    lumMean,
+    lumStd,
+    activity,
   };
 }
 

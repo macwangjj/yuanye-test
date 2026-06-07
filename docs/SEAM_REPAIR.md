@@ -164,6 +164,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `textureDensityScore` and `fineDetailRatio`; history downloads require the current texture-density gate.
 - Tests cover sharp printable texture that must pass and a soft low-detail output that must fail.
 
+## 0.7.31 Outer Frame Gate
+
+- The quality gate now scans wide outer bands on all four sides and compares them with nearby interior regions.
+- Outputs with broad white/black/tinted margins, picture-frame borders, or quiet edge gutters are rejected as `画框留白边界，不可修复`.
+- This issue is routed to regeneration instead of seam repair, because a framed composition is not one full-bleed printable repeat unit.
+- Certification metadata stores `outerFrameScore` and `outerFrameRiskSides`; history downloads require the current outer-frame gate.
+- Tests cover all-over texture that must pass and a synthetic wide-margin frame that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
