@@ -326,6 +326,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The health response exposes only operational status, version, model configuration, base URL, and whether auth is enabled; protected image generation, history, repair, and downloads still require a valid session.
 - Tests start the server with password protection enabled and assert that `/api/health` returns 200 while `/api/history` still returns 401 without login.
 
+## 0.7.53 Maimai Masked AI Seam Repair
+
+- The maimai-compatible image attempt plan now honors the AI seam-repair mask.
+- When AI Offset repair prepares an offset tile plus seam mask, the server first sends masked edit requests so the image model redraws only the center seam cross and internal guide bands before any unmasked fallback runs.
+- If the gateway rejects masked edits, the existing unmasked maimai attempts still run afterward, preserving compatibility while giving true inpaint-style seam repair the first chance.
+- Tests cover maimai masked-attempt ordering and ensure masked auto fallback happens before unmasked edits.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

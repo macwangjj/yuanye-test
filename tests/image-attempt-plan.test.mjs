@@ -20,6 +20,27 @@ test("maimai image attempts exhaust requested portrait size before auto fallback
   assert.deepEqual(attempts.slice(0, 4).map((attempt) => attempt.size), ["1024x1536", "1024x1536", "1024x1536", "1024x1536"]);
 });
 
+test("maimai masked seam repairs send the mask before falling back to unmasked edits", () => {
+  const { buildImageAttempts } = loadAttemptPlanner();
+  const attempts = buildImageAttempts({
+    model: "gpt-image-2",
+    size: "1024x1536",
+    hasMask: true,
+    maimaiGateway: true,
+  });
+  const firstUnmasked = attempts.findIndex((attempt) => !attempt.masked);
+
+  assert.equal(attempts[0].masked, true, "masked seam repair should be the first maimai attempt");
+  assert.equal(attempts[0].size, "1024x1536");
+  assert.equal(attempts[0].highQuality, true);
+  assert.ok(firstUnmasked > 0, `maimai plan should fall back to unmasked edits only after masked attempts; got ${JSON.stringify(attempts)}`);
+  assert.ok(attempts.slice(0, firstUnmasked).every((attempt) => attempt.masked), "all attempts before the fallback should carry the seam mask");
+  assert.ok(
+    attempts.findIndex((attempt) => attempt.masked && attempt.size === "auto") < firstUnmasked,
+    "masked auto fallback should still run before unmasked edits",
+  );
+});
+
 test("standard image attempts keep masked repair before unmasked generation", () => {
   const { buildImageAttempts } = loadAttemptPlanner();
   const attempts = buildImageAttempts({

@@ -19,7 +19,7 @@ const imageModel = (process.env.OPENAI_IMAGE_MODEL || "gpt-image-2").trim();
 const imageModelCandidates = unique([imageModel, "gpt-image-2", "gpt-image-1.5", "gpt-image-1"]);
 const apiBaseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
 const imageEditUrl = `${apiBaseUrl}/images/edits`;
-const appVersion = "0.7.52-test";
+const appVersion = "0.7.53-test";
 const appPassword = (process.env.YUANYE_PASSWORD || "").trim();
 const sessionSecret = (process.env.YUANYE_SESSION_SECRET || apiKey || appPassword || randomBytes(32).toString("hex")).trim();
 const authEnabled = appPassword.length > 0;
@@ -295,7 +295,18 @@ async function generateImage(payload) {
 
 function buildImageAttempts({ model, size, hasMask = false, maimaiGateway = false }) {
   if (maimaiGateway) {
+    const maskedAttempts = hasMask
+      ? [
+        { model, fieldName: "image", size, highQuality: true, masked: true },
+        { model, transport: "curl", size, highQuality: true, masked: true },
+        { model, fieldName: "image", size, highQuality: false, masked: true },
+        { model, transport: "curl", size, highQuality: false, masked: true },
+        { model, fieldName: "image", size: "auto", highQuality: false, masked: true },
+        { model, transport: "curl", size: "auto", highQuality: false, masked: true },
+      ]
+      : [];
     return [
+      ...maskedAttempts,
       { model, fieldName: "image", size, highQuality: false },
       { model, transport: "curl", size, highQuality: false },
       { model, fieldName: "image", size, highQuality: true },
