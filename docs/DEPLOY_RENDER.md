@@ -31,6 +31,14 @@ YUANYE_HOST=0.0.0.0
 
 Do not put secrets in `.env` before uploading the repository. `.env`, `history/`, and `logs/` are ignored by `.gitignore`.
 
+## Health Check
+
+After deploy, open:
+
+`https://<your-render-service>.onrender.com/api/health`
+
+It should return JSON with `ok: true`, the current `version`, the configured model names, and whether login protection is enabled. This route is intentionally public so Render and external monitors can verify that the service is alive; image generation, history, and downloads still require the site password when `YUANYE_PASSWORD` is set.
+
 ## Testing Notes
 
 - Render Free Web Services sleep after idle time, so the first request may be slow.

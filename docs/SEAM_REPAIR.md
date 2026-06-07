@@ -320,6 +320,12 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The local overlap path is never sent to simple edge blending; it routes through AI redraw so stacked flowers, leaves, or texture patches can be rebuilt into natural spacing and continuous motif flow.
 - Tests cover localized-overlap reclassification, severe-overlap rejection, AI repair routing, and the unchanged commercial download gate.
 
+## 0.7.52 Deploy Health Check
+
+- `/api/health` is public even when the test site password is enabled, so deployment platforms and external checks can verify that the service is alive.
+- The health response exposes only operational status, version, model configuration, base URL, and whether auth is enabled; protected image generation, history, repair, and downloads still require a valid session.
+- Tests start the server with password protection enabled and assert that `/api/health` returns 200 while `/api/history` still returns 401 without login.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
