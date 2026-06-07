@@ -6,7 +6,7 @@ This test build treats four-way repeat quality as a production requirement, not 
 
 1. Generate one repeat tile from the reference image.
 2. Export to the print target size: `4961 x 7559 px`, 300 dpi.
-3. Run seam scoring on the raw print export first. The checker looks at opposite borders, corners, local break windows, internal guide lines, one-sided border-object risk, edge-band artifacts, and the center cross that appears in a real 2x2 tiled preview.
+3. Run seam scoring on the raw print export first. The checker looks at opposite borders, corners, local break windows, internal guide lines, one-sided border-object risk, edge-band artifacts, edge drift, and the center cross that appears in a real 2x2 tiled preview.
 4. Use `repairSeams` as the primary local repair path:
    - feathered weights instead of a hard border average;
    - opposite-edge matching;
@@ -31,6 +31,7 @@ A tile can look numerically seamless while still failing in a 2x2 preview: the b
 - no one-sided border object;
 - no visible flat, blurry, or shifted edge band after tiling.
 - no hard center cross, halo, or fake border stripe in a simulated 2x2 tile preview.
+- no edge drift where the opposite borders only line up after sliding a few pixels.
 
 ## Why `repairSeams` Changed
 
@@ -67,6 +68,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Review/fail records remain visible for preview, recheck, and fission, but they are not selectable for batch download and are not included in task ZIP exports.
 - Each saved record can carry a `certification` object with target pixels, DPI, format, version, seam scores, tiled-preview score, edge-band score, clarity score, and issue list.
 - History records show `商用下载认证` or `未认证下载`, making it harder to confuse test failures with printable handoff files.
+
+## 0.7.19 Edge-Drift Diagnostic
+
+- The quality gate now scans small windows along the top/bottom and left/right borders for pixel drift.
+- If an edge pair matches much better after a small slide than at the true zero-offset seam, the result is marked as `边缘错位漂移，可修复`.
+- Strong drift is routed to AI Offset repair first, because local edge averaging can make this failure look blurrier instead of truly seamless.
+- The task summary now includes a `错位` score, and certification metadata stores a `driftScore`.
+- Tests include both aligned periodic edge texture that must pass and shifted edge texture that must fail.
 
 ## 0.7.13 Success-Rate Changes
 

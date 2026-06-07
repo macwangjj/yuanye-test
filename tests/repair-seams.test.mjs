@@ -89,6 +89,32 @@ test("tiled preview seam check rejects a matching hard line that appears only af
   assert.ok(tiled.worstScore > 16, `expected a visible tiled seam score; got ${tiled.worstScore}`);
 });
 
+test("edge drift check allows aligned periodic edge texture", () => {
+  const width = 144;
+  const height = 144;
+  const data = makePeriodicPattern(width, height);
+  const horizontal = measureEdgeDriftCore(data, width, height, "horizontal");
+  const vertical = measureEdgeDriftCore(data, width, height, "vertical");
+
+  assert.equal(horizontal.driftRisk, false, `aligned horizontal edge should pass; got ${JSON.stringify(horizontal)}`);
+  assert.equal(vertical.driftRisk, false, `aligned vertical edge should pass; got ${JSON.stringify(vertical)}`);
+  assert.ok(horizontal.worstScore < 10, `aligned horizontal drift score should stay quiet; got ${horizontal.worstScore}`);
+  assert.ok(vertical.worstScore < 10, `aligned vertical drift score should stay quiet; got ${vertical.worstScore}`);
+});
+
+test("edge drift check rejects shifted seam texture", () => {
+  const width = 144;
+  const height = 144;
+  const data = makeSharpPrintPattern(width, height);
+  paintShiftedMatchingEdge(data, width, height, "horizontal", 14, 7);
+
+  const drift = measureEdgeDriftCore(data, width, height, "horizontal");
+
+  assert.equal(drift.driftRisk, true, `shifted edge should be rejected; got ${JSON.stringify(drift)}`);
+  assert.ok(drift.averageShift >= 4, `expected a meaningful detected shift; got ${drift.averageShift}`);
+  assert.ok(drift.worstScore > 13, `expected a visible drift score; got ${drift.worstScore}`);
+});
+
 test("print clarity check allows sharp printable texture and rejects blurred output", () => {
   const width = 160;
   const height = 160;
@@ -215,6 +241,27 @@ function paintMatchingLine(data, width, height, direction, band, color) {
   }
 }
 
+function paintShiftedMatchingEdge(data, width, height, direction, depth, shift) {
+  const source = new Uint8ClampedArray(data);
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  for (let offset = 0; offset < depth; offset += 1) {
+    for (let along = 0; along < length; along += 1) {
+      const shiftedAlong = wrapIndex(along - shift, length);
+      const sourceX = horizontal ? along : offset;
+      const sourceY = horizontal ? offset : along;
+      const targetX = horizontal ? shiftedAlong : width - 1 - offset;
+      const targetY = horizontal ? height - 1 - offset : shiftedAlong;
+      const sourceIndex = (sourceY * width + sourceX) * 4;
+      const targetIndex = (targetY * width + targetX) * 4;
+      data[targetIndex] = source[sourceIndex];
+      data[targetIndex + 1] = source[sourceIndex + 1];
+      data[targetIndex + 2] = source[sourceIndex + 2];
+      data[targetIndex + 3] = 255;
+    }
+  }
+}
+
 function paintBand(data, width, height, side, color) {
   const band = 6;
   for (let y = 0; y < height; y += 1) {
@@ -325,6 +372,129 @@ function measureEdgeBandArtifactCore(data, width, height, direction) {
     flatRatio,
     shiftRatio,
     bandRisk: worstScore > 20 || score > 12 || (flatWindows >= 2 && flatRatio > 0.06) || (shiftWindows >= 2 && shiftRatio > 0.08),
+  };
+}
+
+function measureEdgeDriftCore(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const depth = Math.max(4, Math.min(18, Math.round(cross * 0.012)));
+  const maxShift = Math.max(4, Math.min(24, Math.round(length * 0.05)));
+  const windowSize = Math.max(28, Math.min(132, Math.round(length / 22)));
+  const windowStep = Math.max(12, Math.round(windowSize * 0.48));
+  const sampleStep = Math.max(1, Math.round(windowSize / 18));
+  const depthStep = Math.max(1, Math.round(depth / 6));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let shiftedWindows = 0;
+  let totalShift = 0;
+  let worstShift = 0;
+  let dominantShift = 0;
+  let bestConfidence = 0;
+
+  for (let start = 0; start < length; start += windowStep) {
+    const end = Math.min(length, start + windowSize);
+    let activityTotal = 0;
+    let activityCount = 0;
+
+    for (let position = start; position < end; position += sampleStep) {
+      const along = Math.min(length - 1, position);
+      const nextAlong = wrapIndex(along + sampleStep, length);
+      for (let offset = 0; offset < depth; offset += depthStep) {
+        const aCross = offset;
+        const bCross = cross - 1 - offset;
+        const innerA = Math.min(cross - 1, offset + depthStep);
+        const innerB = Math.max(0, cross - 1 - offset - depthStep);
+        const ax = horizontal ? along : aCross;
+        const ay = horizontal ? aCross : along;
+        const bx = horizontal ? along : bCross;
+        const by = horizontal ? bCross : along;
+        const anx = horizontal ? nextAlong : innerA;
+        const any = horizontal ? innerA : nextAlong;
+        const bnx = horizontal ? nextAlong : innerB;
+        const bny = horizontal ? innerB : nextAlong;
+
+        activityTotal += (
+          pixelDistance(data, width, ax, ay, anx, any) +
+          pixelDistance(data, width, bx, by, bnx, bny)
+        ) / 2;
+        activityCount += 1;
+      }
+    }
+
+    const edgeActivity = activityTotal / Math.max(1, activityCount);
+    let zeroDiff = Infinity;
+    let bestDiff = Infinity;
+    let bestShift = 0;
+
+    for (let shift = -maxShift; shift <= maxShift; shift += 1) {
+      let diffTotal = 0;
+      let sampleCount = 0;
+
+      for (let position = start; position < end; position += sampleStep) {
+        const alongA = Math.min(length - 1, position);
+        const alongB = wrapIndex(alongA + shift, length);
+        for (let offset = 0; offset < depth; offset += depthStep) {
+          const ax = horizontal ? alongA : offset;
+          const ay = horizontal ? offset : alongA;
+          const bx = horizontal ? alongB : width - 1 - offset;
+          const by = horizontal ? height - 1 - offset : alongB;
+          diffTotal += pixelDistance(data, width, ax, ay, bx, by);
+          sampleCount += 1;
+        }
+      }
+
+      const diff = diffTotal / Math.max(1, sampleCount);
+      if (shift === 0) zeroDiff = diff;
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestShift = shift;
+      }
+    }
+
+    const improvement = Math.max(0, zeroDiff - bestDiff);
+    const shiftAbs = Math.abs(bestShift);
+    const confidence = improvement / Math.max(1, zeroDiff);
+    const explainableShift = (
+      shiftAbs >= 2 &&
+      zeroDiff > 8 &&
+      edgeActivity > 3.5 &&
+      bestDiff < zeroDiff * 0.78 &&
+      improvement > Math.max(3.2, edgeActivity * 0.16)
+    );
+    const driftScore = explainableShift
+      ? improvement * Math.min(1, shiftAbs / 6) * (0.65 + Math.min(0.55, confidence)) + Math.max(0, zeroDiff - bestDiff * 1.32) * 0.35
+      : 0;
+
+    total += driftScore;
+    count += 1;
+    if (driftScore > worstScore) {
+      worstScore = driftScore;
+      worstShift = shiftAbs;
+      dominantShift = bestShift;
+      bestConfidence = confidence;
+    }
+    if (driftScore > 8 && shiftAbs >= 2) {
+      shiftedWindows += 1;
+      totalShift += shiftAbs;
+    }
+  }
+
+  const score = total / Math.max(1, count);
+  const shiftedRatio = shiftedWindows / Math.max(1, count);
+  const averageShift = totalShift / Math.max(1, shiftedWindows);
+  return {
+    score,
+    worstScore,
+    shiftedWindows,
+    shiftedRatio,
+    averageShift,
+    worstShift,
+    dominantShift,
+    confidence: bestConfidence,
+    driftRisk: worstScore > 13.5 || score > 8.5 || (shiftedWindows >= 2 && shiftedRatio > 0.08 && averageShift >= 2.4 && worstScore > 9.5),
   };
 }
 
