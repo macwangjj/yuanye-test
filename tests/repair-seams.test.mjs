@@ -163,6 +163,20 @@ test("print clarity check allows sharp printable texture and rejects blurred out
   assert.ok(sharpClarity.detailScore > blurredClarity.detailScore * 1.8, `sharp detail should be much higher; sharp=${sharpClarity.detailScore} blurred=${blurredClarity.detailScore}`);
 });
 
+test("print upscale artifact check rejects low-resolution pixel-replicated output", () => {
+  const width = 180;
+  const height = 180;
+  const clean = makeSmoothPrintPattern(width, height);
+  const low = downsampleNearest(clean, width, height, 36, 36);
+  const replicated = upscaleNearest(low, 36, 36, width, height);
+  const cleanCheck = measureUpscaleArtifactCore(clean, width, height);
+  const replicatedCheck = measureUpscaleArtifactCore(replicated, width, height);
+
+  assert.equal(cleanCheck.upscaleArtifactRisk, false, `clean printable texture should not look like a low-resolution upscale; got ${JSON.stringify(cleanCheck)}`);
+  assert.equal(replicatedCheck.upscaleArtifactRisk, true, `pixel-replicated low-resolution output should be rejected; got ${JSON.stringify(replicatedCheck)}`);
+  assert.ok(replicatedCheck.artifactScore > cleanCheck.artifactScore * 2, `upscaled artifact score should be much higher; clean=${cleanCheck.artifactScore} upscaled=${replicatedCheck.artifactScore}`);
+});
+
 test("print richness check rejects nearly empty low-information output", () => {
   const width = 160;
   const height = 160;
@@ -321,6 +335,58 @@ function makeSoftLowDetailPattern(width, height) {
     }
   }
   return data;
+}
+
+function makeSmoothPrintPattern(width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const wash = Math.sin(x * 0.23 + y * 0.11) * 24 +
+        Math.cos(x * 0.05) * 18 +
+        Math.sin((x * x + y * y) * 0.0009) * 20;
+      const line = ((x + y) % 17 === 0 || Math.abs(Math.sin(x * 0.17) + Math.cos(y * 0.13)) > 1.88) ? 70 : 0;
+      data[i] = clamp(132 + wash + line);
+      data[i + 1] = clamp(118 + wash * 0.8 + line * 0.75);
+      data[i + 2] = clamp(92 + wash * 0.55 + line * 0.52);
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function downsampleNearest(source, width, height, targetWidth, targetHeight) {
+  const output = new Uint8ClampedArray(targetWidth * targetHeight * 4);
+  for (let y = 0; y < targetHeight; y += 1) {
+    for (let x = 0; x < targetWidth; x += 1) {
+      const sx = Math.floor((x * width) / targetWidth);
+      const sy = Math.floor((y * height) / targetHeight);
+      const sourceIndex = (sy * width + sx) * 4;
+      const outputIndex = (y * targetWidth + x) * 4;
+      output[outputIndex] = source[sourceIndex];
+      output[outputIndex + 1] = source[sourceIndex + 1];
+      output[outputIndex + 2] = source[sourceIndex + 2];
+      output[outputIndex + 3] = 255;
+    }
+  }
+  return output;
+}
+
+function upscaleNearest(source, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+  const output = new Uint8ClampedArray(targetWidth * targetHeight * 4);
+  for (let y = 0; y < targetHeight; y += 1) {
+    for (let x = 0; x < targetWidth; x += 1) {
+      const sx = Math.floor((x * sourceWidth) / targetWidth);
+      const sy = Math.floor((y * sourceHeight) / targetHeight);
+      const sourceIndex = (sy * sourceWidth + sx) * 4;
+      const outputIndex = (y * targetWidth + x) * 4;
+      output[outputIndex] = source[sourceIndex];
+      output[outputIndex + 1] = source[sourceIndex + 1];
+      output[outputIndex + 2] = source[sourceIndex + 2];
+      output[outputIndex + 3] = 255;
+    }
+  }
+  return output;
 }
 
 function makeCenteredMotifPattern(width, height) {
@@ -1202,6 +1268,95 @@ function measurePrintClarityCore(data, width, height) {
     riskScore,
     softBlurRisk,
     blurRisk,
+  };
+}
+
+function measureUpscaleArtifactCore(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 360));
+  const rowStep = Math.max(sampleStep * 4, Math.round(height / 84));
+  const colStep = Math.max(sampleStep * 4, Math.round(width / 84));
+  let flatPairs = 0;
+  let strongJumps = 0;
+  let stairPairs = 0;
+  let runSegments = 0;
+  let runLengthTotal = 0;
+  let diffTotal = 0;
+  let diffSquareTotal = 0;
+  let count = 0;
+
+  function scanLine(length, luminanceAt) {
+    let previousDiff = null;
+    let flatRun = 0;
+    for (let position = sampleStep; position < length; position += sampleStep) {
+      const diff = Math.abs(luminanceAt(position) - luminanceAt(position - sampleStep));
+      diffTotal += diff;
+      diffSquareTotal += diff * diff;
+      count += 1;
+
+      if (diff < 0.55) {
+        flatPairs += 1;
+        flatRun += 1;
+      } else {
+        if (flatRun >= 3) {
+          runSegments += 1;
+          runLengthTotal += flatRun;
+        }
+        flatRun = 0;
+      }
+
+      if (diff > 11) strongJumps += 1;
+      if (
+        previousDiff !== null &&
+        ((previousDiff < 0.65 && diff > 11) || (previousDiff > 11 && diff < 0.65))
+      ) {
+        stairPairs += 1;
+      }
+      previousDiff = diff;
+    }
+
+    if (flatRun >= 3) {
+      runSegments += 1;
+      runLengthTotal += flatRun;
+    }
+  }
+
+  for (let y = 0; y < height; y += rowStep) {
+    scanLine(width, (x) => pixelLuminance(data, width, x, y));
+  }
+  for (let x = 0; x < width; x += colStep) {
+    scanLine(height, (y) => pixelLuminance(data, width, x, y));
+  }
+
+  const flatPairRatio = flatPairs / Math.max(1, count);
+  const strongJumpRatio = strongJumps / Math.max(1, count);
+  const stairPairRatio = stairPairs / Math.max(1, count);
+  const runRatio = runSegments / Math.max(1, count);
+  const averageRun = runLengthTotal / Math.max(1, runSegments);
+  const meanDiff = diffTotal / Math.max(1, count);
+  const diffVariance = Math.max(0, diffSquareTotal / Math.max(1, count) - meanDiff * meanDiff);
+  const diffBurstScore = Math.sqrt(diffVariance) / Math.max(1, meanDiff);
+  const artifactScore = flatPairRatio * 22 +
+    strongJumpRatio * 18 +
+    stairPairRatio * 36 +
+    Math.min(8, averageRun) * 0.8 +
+    diffBurstScore * 3;
+  const upscaleArtifactRisk = (
+    flatPairRatio > 0.68 &&
+    strongJumpRatio > 0.06 &&
+    stairPairRatio > 0.14 &&
+    averageRun > 3.4 &&
+    artifactScore > 32
+  );
+
+  return {
+    artifactScore,
+    flatPairRatio,
+    strongJumpRatio,
+    stairPairRatio,
+    runRatio,
+    averageRun,
+    diffBurstScore,
+    upscaleArtifactRisk,
   };
 }
 

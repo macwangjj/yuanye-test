@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.37-test";
+const clientVersion = "0.7.38-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -513,6 +513,7 @@ function recordHasCertifiedDownload(record) {
     gate.fourWayRepeat === true &&
     gate.qualityPassed === true &&
     typeof gate.seamDetailLossScore === "number" &&
+    typeof gate.upscaleArtifactScore === "number" &&
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
@@ -596,6 +597,8 @@ function buildPrintCertification(task, actionType = "generate") {
       seamDetailLossScore: Math.max(check.detailHorizontal?.score || 0, check.detailVertical?.score || 0),
       driftScore: Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0),
       clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
+      upscaleArtifactScore: typeof check.upscaleArtifact?.artifactScore === "number" ? check.upscaleArtifact.artifactScore : null,
+      upscaleFlatPairRatio: typeof check.upscaleArtifact?.flatPairRatio === "number" ? check.upscaleArtifact.flatPairRatio : null,
       richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
       activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
       layoutBalanceScore: typeof check.layoutBalance?.balanceScore === "number" ? check.layoutBalance.balanceScore : null,
@@ -1595,7 +1598,7 @@ function shouldForcePeriodicRepair(check) {
 }
 
 function shouldPrintClarityEnhance(check) {
-  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足") || issue.includes("细节密度不足")));
+  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足") || issue.includes("细节密度不足") || issue.includes("放大痕迹")));
 }
 
 async function runSeamCheck(task, quiet = false) {
@@ -1667,6 +1670,7 @@ function seamCheckSummary(check) {
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
     `边框 ${Number(check.outerFrame?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
+    `放大 ${Number(check.upscaleArtifact?.artifactScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     `密度 ${(Number(check.textureDensity?.fineDetailRatio || 0) * 100).toFixed(0)}%`,
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
@@ -1693,6 +1697,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("疑似平铺预览输出，不可修复")) return "疑似平铺预览输出，不可修复";
   if (check.issues?.includes("画框留白边界，不可修复")) return "画框留白边界，不可修复";
   if (check.issues?.includes("镜像轴痕明显，可修复")) return "镜像轴痕明显，可修复";
+  if (check.issues?.includes("低清放大痕迹，可增强")) return "低清放大痕迹，可增强";
   if (check.issues?.includes("印花细节密度不足，可增强")) return "印花细节密度不足，可增强";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
@@ -2164,6 +2169,7 @@ function measureSeamQuality(ctx, width, height) {
   const driftHorizontal = measureEdgeDrift(data, width, height, "horizontal");
   const driftVertical = measureEdgeDrift(data, width, height, "vertical");
   const clarity = measurePrintClarity(data, width, height);
+  const upscaleArtifact = measureUpscaleArtifact(data, width, height);
   const richness = measurePrintRichness(data, width, height);
   const textureDensity = measurePrintTextureDensity(data, width, height);
   const layoutBalance = measurePatternBalance(data, width, height);
@@ -2226,6 +2232,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && bandArtifactRisk) issues.push("平铺边带明显，可修复");
   if (!issues.length && seamDetailRisk) issues.push("接缝细节发虚，可修复");
   if (!issues.length && clarity.blurRisk) issues.push("成品清晰度不足，可增强");
+  if (!issues.length && upscaleArtifact.upscaleArtifactRisk) issues.push("低清放大痕迹，可增强");
   if (!issues.length && textureDensity.lowTextureDensityRisk) issues.push("印花细节密度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
@@ -2263,6 +2270,7 @@ function measureSeamQuality(ctx, width, height) {
     !preTiledPreviewRisk &&
     !outerFrame.frameRisk &&
     !richness.lowInformationRisk &&
+    !upscaleArtifact.upscaleArtifactRisk &&
     !textureDensity.lowTextureDensityRisk &&
     !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
@@ -2301,6 +2309,7 @@ function measureSeamQuality(ctx, width, height) {
     mirrorVertical,
     preTiledPreview,
     clarity,
+    upscaleArtifact,
     richness,
     textureDensity,
     layoutBalance,
@@ -3244,6 +3253,95 @@ function measurePrintClarity(data, width, height) {
     riskScore,
     softBlurRisk,
     blurRisk,
+  };
+}
+
+function measureUpscaleArtifact(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 360));
+  const rowStep = Math.max(sampleStep * 4, Math.round(height / 84));
+  const colStep = Math.max(sampleStep * 4, Math.round(width / 84));
+  let flatPairs = 0;
+  let strongJumps = 0;
+  let stairPairs = 0;
+  let runSegments = 0;
+  let runLengthTotal = 0;
+  let diffTotal = 0;
+  let diffSquareTotal = 0;
+  let count = 0;
+
+  function scanLine(length, luminanceAt) {
+    let previousDiff = null;
+    let flatRun = 0;
+    for (let position = sampleStep; position < length; position += sampleStep) {
+      const diff = Math.abs(luminanceAt(position) - luminanceAt(position - sampleStep));
+      diffTotal += diff;
+      diffSquareTotal += diff * diff;
+      count += 1;
+
+      if (diff < 0.55) {
+        flatPairs += 1;
+        flatRun += 1;
+      } else {
+        if (flatRun >= 3) {
+          runSegments += 1;
+          runLengthTotal += flatRun;
+        }
+        flatRun = 0;
+      }
+
+      if (diff > 11) strongJumps += 1;
+      if (
+        previousDiff !== null &&
+        ((previousDiff < 0.65 && diff > 11) || (previousDiff > 11 && diff < 0.65))
+      ) {
+        stairPairs += 1;
+      }
+      previousDiff = diff;
+    }
+
+    if (flatRun >= 3) {
+      runSegments += 1;
+      runLengthTotal += flatRun;
+    }
+  }
+
+  for (let y = 0; y < height; y += rowStep) {
+    scanLine(width, (x) => pixelLuminance(data, width, x, y));
+  }
+  for (let x = 0; x < width; x += colStep) {
+    scanLine(height, (y) => pixelLuminance(data, width, x, y));
+  }
+
+  const flatPairRatio = flatPairs / Math.max(1, count);
+  const strongJumpRatio = strongJumps / Math.max(1, count);
+  const stairPairRatio = stairPairs / Math.max(1, count);
+  const runRatio = runSegments / Math.max(1, count);
+  const averageRun = runLengthTotal / Math.max(1, runSegments);
+  const meanDiff = diffTotal / Math.max(1, count);
+  const diffVariance = Math.max(0, diffSquareTotal / Math.max(1, count) - meanDiff * meanDiff);
+  const diffBurstScore = Math.sqrt(diffVariance) / Math.max(1, meanDiff);
+  const artifactScore = flatPairRatio * 22 +
+    strongJumpRatio * 18 +
+    stairPairRatio * 36 +
+    Math.min(8, averageRun) * 0.8 +
+    diffBurstScore * 3;
+  const upscaleArtifactRisk = (
+    flatPairRatio > 0.68 &&
+    strongJumpRatio > 0.06 &&
+    stairPairRatio > 0.14 &&
+    averageRun > 3.4 &&
+    artifactScore > 32
+  );
+
+  return {
+    artifactScore,
+    flatPairRatio,
+    strongJumpRatio,
+    stairPairRatio,
+    runRatio,
+    averageRun,
+    diffBurstScore,
+    upscaleArtifactRisk,
   };
 }
 

@@ -211,6 +211,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - This prevents an in-memory task from becoming downloadable if it has a stale or partial aspect-warp result without proof that the final JPG was exported as either direct portrait or a valid periodic grid.
 - Tests cover current direct exports, current periodic-grid exports, missing geometry, and mode/grid mismatches.
 
+## 0.7.38 Low-Resolution Upscale Gate
+
+- The quality gate now checks for low-resolution enlargement artifacts: long flat pixel plateaus, sudden luminance jumps, and stair-step transitions that appear after a small source tile is scaled up.
+- This catches outputs that can look artificially sharp after sharpening but still print like a low-resolution enlarged image.
+- The issue is reported as `低清放大痕迹，可增强`, so the pipeline first tries print-clarity enhancement and then rechecks before allowing download.
+- Certification metadata stores `upscaleArtifactScore` and `upscaleFlatPairRatio`; history downloads require the current upscale-artifact gate.
+- Tests cover a clean printable texture that must pass and a pixel-replicated low-resolution output that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
