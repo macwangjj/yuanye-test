@@ -30,6 +30,7 @@ test("history and batch downloads only include certified records", () => {
 
 test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /certification: buildPrintCertification\(task, actionType\)/, "client should send certification metadata");
+  assert.match(appSource, /dpiMetadata: "JFIF inch density"/, "certification should state the JPG DPI metadata contract");
   assert.match(appSource, /cornerJunctionScore: check\.tiledCorner\?\.score \|\| 0/, "certification should retain four-corner junction score");
   assert.match(appSource, /driftScore: Math\.max\(check\.driftHorizontal\?\.score \|\| 0, check\.driftVertical\?\.score \|\| 0\)/, "certification should retain edge-drift score");
   assert.match(serverSource, /certification: payload\.certification \|\| null/, "server should persist certification metadata");

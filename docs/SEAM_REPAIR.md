@@ -86,6 +86,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The task summary now includes a `交汇` score, and certification metadata stores `cornerJunctionScore`.
 - Tests include aligned periodic corners that must pass and a matching hard corner spot that must fail.
 
+## 0.7.21 Print DPI Metadata Guarantee
+
+- Final JPG exports now guarantee a JFIF APP0 density segment set to 300 pixels per inch.
+- If the browser encoder already emits JFIF metadata, the density is patched in place.
+- If the browser encoder omits JFIF metadata, the exporter inserts a valid JFIF segment immediately after the JPEG SOI marker.
+- Certification metadata records the DPI contract as `JFIF inch density`.
+- Tests cover both existing-JFIF and missing-JFIF JPEG outputs.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

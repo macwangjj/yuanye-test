@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.20-test";
+const clientVersion = "0.7.21-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -513,6 +513,7 @@ function buildPrintCertification(task, actionType = "generate") {
       widthPx: 4961,
       heightPx: 7559,
       dpi: 300,
+      dpiMetadata: "JFIF inch density",
       format: "jpg",
       use: "digital textile print",
     },
@@ -3178,27 +3179,87 @@ function colorDistance(data, a, b) {
 function withJpegDpi(dataUrl, dpi) {
   const marker = "data:image/jpeg;base64,";
   if (!dataUrl.startsWith(marker)) return dataUrl;
+  const bytes = jpegDataUrlToBytes(dataUrl, marker);
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return dataUrl;
+
+  const jfifOffset = findJfifSegmentOffset(bytes);
+  if (jfifOffset >= 0) {
+    const patched = new Uint8Array(bytes);
+    patchJfifDensity(patched, jfifOffset, dpi);
+    return bytesToJpegDataUrl(patched, marker);
+  }
+
+  return bytesToJpegDataUrl(insertJfifDpiSegment(bytes, dpi), marker);
+}
+
+function jpegDataUrlToBytes(dataUrl, marker) {
   const binary = atob(dataUrl.slice(marker.length));
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
   }
+  return bytes;
+}
 
-  // Patch JFIF density metadata when the browser encoder includes an APP0 segment.
-  if (
-    bytes[0] === 0xff &&
-    bytes[1] === 0xd8 &&
-    bytes[2] === 0xff &&
-    bytes[3] === 0xe0 &&
-    String.fromCharCode(bytes[6], bytes[7], bytes[8], bytes[9], bytes[10]) === "JFIF\0"
-  ) {
-    bytes[13] = 1;
-    bytes[14] = (dpi >> 8) & 0xff;
-    bytes[15] = dpi & 0xff;
-    bytes[16] = (dpi >> 8) & 0xff;
-    bytes[17] = dpi & 0xff;
+function findJfifSegmentOffset(bytes) {
+  let index = 2;
+  while (index + 4 < bytes.length && bytes[index] === 0xff) {
+    const marker = bytes[index + 1];
+    if (marker === 0xda || marker === 0xd9) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      index += 2;
+      continue;
+    }
+    const length = (bytes[index + 2] << 8) | bytes[index + 3];
+    if (length < 2 || index + 2 + length > bytes.length) break;
+    if (
+      marker === 0xe0 &&
+      bytes[index + 4] === 0x4a &&
+      bytes[index + 5] === 0x46 &&
+      bytes[index + 6] === 0x49 &&
+      bytes[index + 7] === 0x46 &&
+      bytes[index + 8] === 0x00
+    ) {
+      return index;
+    }
+    index += 2 + length;
   }
+  return -1;
+}
 
+function patchJfifDensity(bytes, offset, dpi) {
+  bytes[offset + 11] = 1;
+  bytes[offset + 12] = (dpi >> 8) & 0xff;
+  bytes[offset + 13] = dpi & 0xff;
+  bytes[offset + 14] = (dpi >> 8) & 0xff;
+  bytes[offset + 15] = dpi & 0xff;
+}
+
+function insertJfifDpiSegment(bytes, dpi) {
+  const segment = buildJfifDpiSegment(dpi);
+  const output = new Uint8Array(bytes.length + segment.length);
+  output.set(bytes.subarray(0, 2), 0);
+  output.set(segment, 2);
+  output.set(bytes.subarray(2), 2 + segment.length);
+  return output;
+}
+
+function buildJfifDpiSegment(dpi) {
+  return new Uint8Array([
+    0xff, 0xe0,
+    0x00, 0x10,
+    0x4a, 0x46, 0x49, 0x46, 0x00,
+    0x01, 0x01,
+    0x01,
+    (dpi >> 8) & 0xff,
+    dpi & 0xff,
+    (dpi >> 8) & 0xff,
+    dpi & 0xff,
+    0x00, 0x00,
+  ]);
+}
+
+function bytesToJpegDataUrl(bytes, marker) {
   let output = "";
   const chunkSize = 8192;
   for (let index = 0; index < bytes.length; index += chunkSize) {
