@@ -150,6 +150,19 @@ test("print clarity check allows sharp printable texture and rejects blurred out
   assert.ok(sharpClarity.detailScore > blurredClarity.detailScore * 1.8, `sharp detail should be much higher; sharp=${sharpClarity.detailScore} blurred=${blurredClarity.detailScore}`);
 });
 
+test("print richness check rejects nearly empty low-information output", () => {
+  const width = 160;
+  const height = 160;
+  const sharp = makeSharpPrintPattern(width, height);
+  const flat = makeFlatPrint(width, height, [184, 178, 165]);
+  const sharpRichness = measurePrintRichnessCore(sharp, width, height);
+  const flatRichness = measurePrintRichnessCore(flat, width, height);
+
+  assert.equal(sharpRichness.lowInformationRisk, false, `sharp textile pattern should pass richness gate; got ${JSON.stringify(sharpRichness)}`);
+  assert.equal(flatRichness.lowInformationRisk, true, `near-empty output should be rejected; got ${JSON.stringify(flatRichness)}`);
+  assert.ok(sharpRichness.richnessScore > flatRichness.richnessScore * 3, `pattern richness should be much higher; sharp=${sharpRichness.richnessScore} flat=${flatRichness.richnessScore}`);
+});
+
 test("seam detail loss check rejects a soft blurred seam band", () => {
   const width = 160;
   const height = 160;
@@ -195,6 +208,20 @@ function makeSharpPrintPattern(width, height) {
       data[i] = clamp(128 + woven + line + Math.sin(y * 0.17) * 12);
       data[i + 1] = clamp(112 + woven * 0.85 + line * 0.74 + Math.cos(x * 0.11) * 10);
       data[i + 2] = clamp(94 + woven * 0.62 + line * 0.52);
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function makeFlatPrint(width, height, color) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      data[i] = color[0];
+      data[i + 1] = color[1];
+      data[i + 2] = color[2];
       data[i + 3] = 255;
     }
   }
@@ -922,6 +949,67 @@ function measurePrintClarityCore(data, width, height) {
   };
 }
 
+function measurePrintRichnessCore(data, width, height) {
+  const step = Math.max(1, Math.round(Math.max(width, height) / 260));
+  let gradientTotal = 0;
+  let detailTotal = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let colorSpreadTotal = 0;
+  let activeSamples = 0;
+  let count = 0;
+
+  for (let y = step; y < height - step; y += step) {
+    for (let x = step; x < width - step; x += step) {
+      const index = (Math.round(y) * width + Math.round(x)) * 4;
+      const center = pixelLuminanceAt(data, index);
+      const left = pixelLuminance(data, width, x - step, y);
+      const right = pixelLuminance(data, width, x + step, y);
+      const top = pixelLuminance(data, width, x, y - step);
+      const bottom = pixelLuminance(data, width, x, y + step);
+      const gradient = (Math.abs(right - left) + Math.abs(bottom - top)) / 2;
+      const detail = Math.abs(center * 4 - left - right - top - bottom) / 4;
+      const channelMax = Math.max(data[index], data[index + 1], data[index + 2]);
+      const channelMin = Math.min(data[index], data[index + 1], data[index + 2]);
+
+      gradientTotal += gradient;
+      detailTotal += detail;
+      lumTotal += center;
+      lumSquareTotal += center * center;
+      colorSpreadTotal += channelMax - channelMin;
+      if (gradient > 3.2 || detail > 1.25) {
+        activeSamples += 1;
+      }
+      count += 1;
+    }
+  }
+
+  const gradientScore = gradientTotal / Math.max(1, count);
+  const detailScore = detailTotal / Math.max(1, count);
+  const mean = lumTotal / Math.max(1, count);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - mean * mean));
+  const colorSpreadScore = colorSpreadTotal / Math.max(1, count);
+  const activeRatio = activeSamples / Math.max(1, count);
+  const richnessScore = contrastScore * 0.34 + gradientScore * 0.32 + detailScore * 0.88 + activeRatio * 18;
+  const lowInformationRisk = (
+    contrastScore < 4.6 &&
+    gradientScore < 2.7 &&
+    detailScore < 1.05 &&
+    activeRatio < 0.055 &&
+    richnessScore < 5.2
+  );
+
+  return {
+    richnessScore,
+    activeRatio,
+    detailScore,
+    gradientScore,
+    contrastScore,
+    colorSpreadScore,
+    lowInformationRisk,
+  };
+}
+
 function pixelDetailAt(data, width, height, x, y) {
   const safeX = Math.min(width - 2, Math.max(1, Math.round(x)));
   const safeY = Math.min(height - 2, Math.max(1, Math.round(y)));
@@ -938,6 +1026,10 @@ function pixelDetailAt(data, width, height, x, y) {
 
 function pixelLuminance(data, width, x, y) {
   const index = (Math.round(y) * width + Math.round(x)) * 4;
+  return pixelLuminanceAt(data, index);
+}
+
+function pixelLuminanceAt(data, index) {
   return data[index] * 0.2126 + data[index + 1] * 0.7152 + data[index + 2] * 0.0722;
 }
 

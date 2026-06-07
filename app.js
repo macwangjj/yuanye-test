@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.25-test";
+const clientVersion = "0.7.26-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -492,7 +492,8 @@ function recordHasCertifiedDownload(record) {
     actual.printSpecPassed === true &&
     gate.fourWayRepeat === true &&
     gate.qualityPassed === true &&
-    typeof gate.seamDetailLossScore === "number"
+    typeof gate.seamDetailLossScore === "number" &&
+    typeof gate.richnessScore === "number"
   );
 }
 
@@ -549,6 +550,8 @@ function buildPrintCertification(task, actionType = "generate") {
       seamDetailLossScore: Math.max(check.detailHorizontal?.score || 0, check.detailVertical?.score || 0),
       driftScore: Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0),
       clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
+      richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
+      activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
     },
   };
@@ -1438,6 +1441,7 @@ function shouldHybridSeamRepair(check) {
 
 function shouldEdgeBlendRepair(check) {
   if (!check || check.passed) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足"))) return false;
   if (check.issues?.some((issue) => issue.includes("花型元素叠加") || issue.includes("回头没接"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
@@ -1471,6 +1475,7 @@ function shouldEdgeBlendRepair(check) {
 
 function shouldAiOffsetRepair(check) {
   if (!check || check.passed) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
@@ -1496,6 +1501,7 @@ function shouldAiOffsetRepair(check) {
 
 function shouldForcePeriodicRepair(check) {
   if (!check || check.passed) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足"))) return false;
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
@@ -1590,6 +1596,7 @@ function seamCheckSummary(check) {
     `交汇 ${Number(check.tiledCorner?.score || 0).toFixed(2)}`,
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
+    `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     check.printSpec?.passed === true ? "规格通过" : "规格失败",
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
@@ -1604,6 +1611,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("横档未衔接，不可修复")) return "横档未衔接，不可修复";
   if (check.issues?.includes("竖档未衔接，不可修复")) return "竖档未衔接，不可修复";
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
+  if (check.issues?.includes("花型信息量不足，不可修复")) return "花型信息量不足，不可修复";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
   return "检测到接缝风险";
@@ -2046,6 +2054,7 @@ function measureSeamQuality(ctx, width, height) {
   const driftHorizontal = measureEdgeDrift(data, width, height, "horizontal");
   const driftVertical = measureEdgeDrift(data, width, height, "vertical");
   const clarity = measurePrintClarity(data, width, height);
+  const richness = measurePrintRichness(data, width, height);
   const peakLimitH = Math.max(18, Math.round((band * samplesX) * 0.12));
   const peakLimitV = Math.max(18, Math.round((band * samplesY) * 0.12));
   const peakRatioH = horizontalPeaks / Math.max(1, band * samplesX);
@@ -2085,6 +2094,7 @@ function measureSeamQuality(ctx, width, height) {
   if (severeHorizontal) issues.push("横档未衔接，不可修复");
   if (severeVertical) issues.push("竖档未衔接，不可修复");
   if (severeCorner) issues.push("回头没接，不可修复");
+  if (!issues.length && richness.lowInformationRisk) issues.push("花型信息量不足，不可修复");
   if (!issues.length && driftRisk) issues.push("边缘错位漂移，可修复");
   if (!issues.length && cornerJunctionRisk) issues.push("四角平铺交汇明显，可修复");
   if (overlayRisk && !driftRisk && !severeHorizontal && !severeVertical) issues.push("花型元素叠加，不可修复");
@@ -2121,6 +2131,7 @@ function measureSeamQuality(ctx, width, height) {
     maxDriftScore <= 7.2 &&
     maxDriftWorst <= 14 &&
     !driftRisk &&
+    !richness.lowInformationRisk &&
     !clarity.blurRisk
   );
   if (!passed && repairability === "pass") {
@@ -2153,6 +2164,7 @@ function measureSeamQuality(ctx, width, height) {
     driftHorizontal,
     driftVertical,
     clarity,
+    richness,
     repairability: passed ? "pass" : repairability,
     finalIssueType,
     issues,
@@ -3008,6 +3020,67 @@ function measurePrintClarity(data, width, height) {
     riskScore,
     softBlurRisk,
     blurRisk,
+  };
+}
+
+function measurePrintRichness(data, width, height) {
+  const step = Math.max(1, Math.round(Math.max(width, height) / 260));
+  let gradientTotal = 0;
+  let detailTotal = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let colorSpreadTotal = 0;
+  let activeSamples = 0;
+  let count = 0;
+
+  for (let y = step; y < height - step; y += step) {
+    for (let x = step; x < width - step; x += step) {
+      const index = (Math.round(y) * width + Math.round(x)) * 4;
+      const center = pixelLuminanceAt(data, index);
+      const left = pixelLuminance(data, width, x - step, y);
+      const right = pixelLuminance(data, width, x + step, y);
+      const top = pixelLuminance(data, width, x, y - step);
+      const bottom = pixelLuminance(data, width, x, y + step);
+      const gradient = (Math.abs(right - left) + Math.abs(bottom - top)) / 2;
+      const detail = Math.abs(center * 4 - left - right - top - bottom) / 4;
+      const channelMax = Math.max(data[index], data[index + 1], data[index + 2]);
+      const channelMin = Math.min(data[index], data[index + 1], data[index + 2]);
+
+      gradientTotal += gradient;
+      detailTotal += detail;
+      lumTotal += center;
+      lumSquareTotal += center * center;
+      colorSpreadTotal += channelMax - channelMin;
+      if (gradient > 3.2 || detail > 1.25) {
+        activeSamples += 1;
+      }
+      count += 1;
+    }
+  }
+
+  const gradientScore = gradientTotal / Math.max(1, count);
+  const detailScore = detailTotal / Math.max(1, count);
+  const mean = lumTotal / Math.max(1, count);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - mean * mean));
+  const colorSpreadScore = colorSpreadTotal / Math.max(1, count);
+  const activeRatio = activeSamples / Math.max(1, count);
+  const richnessScore = contrastScore * 0.34 + gradientScore * 0.32 + detailScore * 0.88 + activeRatio * 18;
+  const lowInformationRisk = (
+    contrastScore < 4.6 &&
+    gradientScore < 2.7 &&
+    detailScore < 1.05 &&
+    activeRatio < 0.055 &&
+    richnessScore < 5.2
+  );
+
+  return {
+    richnessScore,
+    activeRatio,
+    detailScore,
+    gradientScore,
+    contrastScore,
+    colorSpreadScore,
+    lowInformationRisk,
   };
 }
 

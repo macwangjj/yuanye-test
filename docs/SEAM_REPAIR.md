@@ -124,6 +124,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The batch button count now reflects only explicitly certified items.
 - Tests cover current-task selection, batch counts, and ZIP filtering.
 
+## 0.7.26 Print Richness Gate
+
+- The quality gate now measures global contrast, local detail, color spread, and active texture ratio.
+- Nearly empty, flat, or low-information outputs are rejected as `花型信息量不足，不可修复`, so a blank seamless tile cannot pass commercial certification.
+- This issue is routed to regeneration rather than seam repair, because local repair cannot create a printable motif system.
+- Certification metadata stores `richnessScore` and `activeTextureRatio`, and history downloads require the current `richnessScore` gate.
+- Tests cover sharp printable patterns that must pass and near-empty outputs that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
