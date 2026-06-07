@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.32-test";
+const clientVersion = "0.7.33-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -478,7 +478,13 @@ function markTaskDownloaded(task) {
 }
 
 function taskHasCertifiedDownload(task) {
-  return Boolean(task?.resultJpgUrl && task?.qualityPassed === true && task?.seamCheck?.passed === true && task?.seamCheck?.printSpec?.passed === true);
+  return Boolean(
+    task?.resultJpgUrl &&
+    task?.qualityPassed === true &&
+    task?.seamCheck?.passed === true &&
+    task?.seamCheck?.printSpec?.passed === true &&
+    task?.seamCheck?.aspectWarp?.passed === true
+  );
 }
 
 function recordHasCertifiedDownload(record) {
@@ -490,6 +496,7 @@ function recordHasCertifiedDownload(record) {
     record?.qualityPassed === true &&
     certification.certified === true &&
     actual.printSpecPassed === true &&
+    actual.aspectWarpPassed === true &&
     gate.fourWayRepeat === true &&
     gate.qualityPassed === true &&
     typeof gate.seamDetailLossScore === "number" &&
@@ -498,7 +505,8 @@ function recordHasCertifiedDownload(record) {
     typeof gate.mirrorAxisScore === "number" &&
     typeof gate.preTiledPreviewScore === "number" &&
     typeof gate.textureDensityScore === "number" &&
-    typeof gate.outerFrameScore === "number"
+    typeof gate.outerFrameScore === "number" &&
+    typeof gate.aspectWarpRatio === "number"
   );
 }
 
@@ -541,6 +549,10 @@ function buildPrintCertification(task, actionType = "generate") {
       dpiY: check.printSpec?.dpiY ?? null,
       dpiUnit: check.printSpec?.dpiUnit ?? "",
       printSpecPassed: check.printSpec?.passed === true,
+      sourceWidthPx: check.aspectWarp?.sourceWidth ?? null,
+      sourceHeightPx: check.aspectWarp?.sourceHeight ?? null,
+      sourceAspect: typeof check.aspectWarp?.sourceAspect === "number" ? check.aspectWarp.sourceAspect : null,
+      aspectWarpPassed: check.aspectWarp?.passed === true,
     },
     gate: {
       fourWayRepeat: check.passed === true,
@@ -567,6 +579,8 @@ function buildPrintCertification(task, actionType = "generate") {
       fineDetailRatio: typeof check.textureDensity?.fineDetailRatio === "number" ? check.textureDensity.fineDetailRatio : null,
       outerFrameScore: typeof check.outerFrame?.score === "number" ? check.outerFrame.score : null,
       outerFrameRiskSides: typeof check.outerFrame?.riskSides === "number" ? check.outerFrame.riskSides : null,
+      aspectWarpRatio: typeof check.aspectWarp?.warpRatio === "number" ? check.aspectWarp.warpRatio : null,
+      aspectStretchPercent: typeof check.aspectWarp?.stretchPercent === "number" ? check.aspectWarp.stretchPercent : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
     },
   };
@@ -860,6 +874,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
   task.seamCheck = null;
   task.originalSeamCheck = null;
   task.repairCheck = null;
+  task.exportMetrics = null;
   task.generationAttempts = 0;
   task.repairAttempts = 0;
   task.aiRepairAttempts = 0;
@@ -901,11 +916,11 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
       task.nodes.resultThumb.style.backgroundImage = "";
 
       phase = "导出目标 JPG";
-      task.resultJpgUrl = await makeJpg(task.resultDataUrl, {
+      task.resultJpgUrl = await makeJpg(task.resultDataUrl, makeTaskJpgOptions(task, {
         enhance: els.autoEnhance.checked,
         strength: getEnhanceStrength(),
         repair: false,
-      });
+      }));
       task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
 
       phase = "严格四方循环质检";
@@ -1108,10 +1123,10 @@ async function enhanceTask(task) {
 
   try {
     const historyMarker = createHistoryMarker("enhance");
-    task.resultJpgUrl = await makeJpg(task.resultDataUrl, {
+    task.resultJpgUrl = await makeJpg(task.resultDataUrl, makeTaskJpgOptions(task, {
       enhance: true,
       strength: getEnhanceStrength(),
-    });
+    }));
     task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
     if (task.nodes.select.checked) toggleTaskSelection(task);
     const check = await runSeamCheck(task, true);
@@ -1144,10 +1159,10 @@ async function finishPrintClarityTask(task, options = {}) {
   }
 
   try {
-    task.resultJpgUrl = await makeJpg(sourceUrl, {
+    task.resultJpgUrl = await makeJpg(sourceUrl, makeTaskJpgOptions(task, {
       enhance: true,
       strength: Math.max(getEnhanceStrength(), 0.34),
-    });
+    }));
     task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
     const check = await runSeamCheck(task, true);
     task.repairCheck = check;
@@ -1293,12 +1308,12 @@ async function aiOffsetRepairTask(task, previousCheck) {
 
   const restoredDataUrl = await makeOffsetDataUrl(payload.image.dataUrl, { reverse: true, format: "png" });
   task.resultDataUrl = restoredDataUrl;
-  task.resultJpgUrl = await makeJpg(restoredDataUrl, {
+  task.resultJpgUrl = await makeJpg(restoredDataUrl, makeTaskJpgOptions(task, {
     enhance: shouldPrintClarityEnhance(previousCheck),
     strength: Math.max(getEnhanceStrength(), 0.3),
     skipAiRepair: true,
     repair: false,
-  });
+  }));
   task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
   const check = await runSeamCheck(task, true);
   task.repairCheck = check;
@@ -1560,7 +1575,7 @@ async function runSeamCheck(task, quiet = false) {
     return;
   }
 
-  const check = await checkSeamQuality(task.resultJpgUrl);
+  const check = applyAspectWarpCheck(await checkSeamQuality(task.resultJpgUrl), task.exportMetrics?.aspectWarp);
   task.seamCheck = check;
   task.seamScore = check.score;
   task.seamRating = check.rating;
@@ -1628,6 +1643,7 @@ function seamCheckSummary(check) {
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
     `镜像 ${Math.max(check.mirrorHorizontal?.score || 0, check.mirrorVertical?.score || 0).toFixed(2)}`,
     `预平铺 ${Number(check.preTiledPreview?.score || 0).toFixed(2)}`,
+    `比例 ${Number(check.aspectWarp?.warpRatio || 1).toFixed(2)}x`,
     check.printSpec?.passed === true ? "规格通过" : "规格失败",
     check.repairability === "enhanceable" ? "可增强" : check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
@@ -1642,6 +1658,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("横档未衔接，不可修复")) return "横档未衔接，不可修复";
   if (check.issues?.includes("竖档未衔接，不可修复")) return "竖档未衔接，不可修复";
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
+  if (check.issues?.includes("输出比例拉伸过大，不可修复")) return "输出比例拉伸过大，不可修复";
   if (check.issues?.includes("花型信息量不足，不可修复")) return "花型信息量不足，不可修复";
   if (check.issues?.includes("花型分布过于集中，不可修复")) return "花型分布过于集中，不可修复";
   if (check.issues?.includes("疑似平铺预览输出，不可修复")) return "疑似平铺预览输出，不可修复";
@@ -1651,6 +1668,14 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
   return "检测到接缝风险";
+}
+
+function makeTaskJpgOptions(task, options = {}) {
+  task.exportMetrics = {};
+  return {
+    ...options,
+    exportMetrics: task.exportMetrics,
+  };
 }
 
 function makeJpg(dataUrl, options = {}) {
@@ -1665,6 +1690,9 @@ function makeJpg(dataUrl, options = {}) {
 
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
+        if (options.exportMetrics) {
+          options.exportMetrics.aspectWarp = measureAspectWarp(image.width, image.height, canvas.width, canvas.height);
+        }
         drawTileToTarget(ctx, image, canvas.width, canvas.height);
         if (options.repair !== false) {
           repairSeams(ctx, canvas.width, canvas.height, options.repairOptions || {});
@@ -4023,6 +4051,37 @@ function measurePrintSpec(dataUrl, widthPx, heightPx) {
   };
 }
 
+function measureAspectWarp(sourceWidth, sourceHeight, targetWidth = 4961, targetHeight = 7559) {
+  const safeSourceWidth = Number(sourceWidth) || 0;
+  const safeSourceHeight = Number(sourceHeight) || 0;
+  const safeTargetWidth = Number(targetWidth) || 0;
+  const safeTargetHeight = Number(targetHeight) || 0;
+  const valid = safeSourceWidth > 0 && safeSourceHeight > 0 && safeTargetWidth > 0 && safeTargetHeight > 0;
+  const sourceAspect = valid ? safeSourceWidth / safeSourceHeight : 0;
+  const targetAspect = valid ? safeTargetWidth / safeTargetHeight : 0;
+  const horizontalScale = valid ? safeTargetWidth / safeSourceWidth : 0;
+  const verticalScale = valid ? safeTargetHeight / safeSourceHeight : 0;
+  const minScale = Math.min(horizontalScale, verticalScale);
+  const maxScale = Math.max(horizontalScale, verticalScale);
+  const warpRatio = valid && minScale > 0 ? maxScale / minScale : Infinity;
+  const stretchPercent = Number.isFinite(warpRatio) ? (warpRatio - 1) * 100 : Infinity;
+  const passed = valid && warpRatio <= 1.08;
+
+  return {
+    sourceWidth: safeSourceWidth,
+    sourceHeight: safeSourceHeight,
+    targetWidth: safeTargetWidth,
+    targetHeight: safeTargetHeight,
+    sourceAspect,
+    targetAspect,
+    horizontalScale,
+    verticalScale,
+    warpRatio,
+    stretchPercent,
+    passed,
+  };
+}
+
 function readJpegDpi(dataUrl) {
   const marker = "data:image/jpeg;base64,";
   if (!String(dataUrl || "").startsWith(marker)) {
@@ -4041,6 +4100,31 @@ function readJpegDpi(dataUrl) {
     return { unit, unitName: "cm", dpiX: Math.round(xDensity * 2.54), dpiY: Math.round(yDensity * 2.54) };
   }
   return { unit, unitName: "none", dpiX: null, dpiY: null };
+}
+
+function applyAspectWarpCheck(check, aspectWarp) {
+  const measured = aspectWarp || measureAspectWarp(0, 0);
+  check.aspectWarp = measured;
+  if (measured.passed) {
+    check.rating = seamRating(check);
+    return check;
+  }
+
+  const issue = "输出比例拉伸过大，不可修复";
+  if (!check.issues.includes(issue)) {
+    if (check.finalIssueType === "成品规格不正确，不可下载") {
+      check.issues.push(issue);
+    } else {
+      check.issues.unshift(issue);
+    }
+  }
+  check.passed = false;
+  check.repairability = "unrepairable";
+  if (check.finalIssueType !== "成品规格不正确，不可下载") {
+    check.finalIssueType = issue;
+  }
+  check.rating = seamRating(check);
+  return check;
 }
 
 function applyPrintSpecCheck(check, printSpec) {

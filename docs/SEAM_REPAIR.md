@@ -172,6 +172,15 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `outerFrameScore` and `outerFrameRiskSides`; history downloads require the current outer-frame gate.
 - Tests cover all-over texture that must pass and a synthetic wide-margin frame that must fail.
 
+## 0.7.33 Aspect-Warp Gate
+
+- The JPG exporter now records the source image dimensions before fitting the image to the `4961 x 7559 px` print canvas.
+- If horizontal and vertical scale differ by more than 8%, the output is rejected as `输出比例拉伸过大，不可修复`.
+- This catches square or landscape model outputs being forced into the portrait textile layout; those files may tile mathematically, but the motifs become visibly distorted and are not commercial-print ready.
+- This issue is routed to regeneration rather than seam repair, because local seam blending cannot recover the correct motif proportion.
+- Certification metadata stores `aspectWarpRatio` and `aspectStretchPercent`; current and history downloads require the aspect-warp gate.
+- Tests cover near-target portrait outputs that must pass and square/landscape outputs that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

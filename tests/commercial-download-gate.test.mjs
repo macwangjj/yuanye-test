@@ -11,6 +11,7 @@ test("single-image download is gated by commercial certification", () => {
 
   assert.match(downloadFunction, /taskHasCertifiedDownload\(task\)/, "downloadJpg must check certification before creating a download link");
   assert.match(certificationFunction, /seamCheck\?\.printSpec\?\.passed === true/, "single-image certification must require print spec verification");
+  assert.match(certificationFunction, /seamCheck\?\.aspectWarp\?\.passed === true/, "single-image certification must reject aspect-warped exports");
   assert.ok(
     downloadFunction.indexOf("taskHasCertifiedDownload(task)") < downloadFunction.indexOf("document.createElement(\"a\")"),
     "certification guard must run before the browser download link is created",
@@ -31,6 +32,7 @@ test("history and batch downloads only include certified records", () => {
   assert.match(selectGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history selection should filter to certified records");
   assert.match(downloadGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history group download should filter to certified records");
   assert.match(recordCertificationFunction, /actual\.printSpecPassed === true/, "history certification must require saved print spec verification");
+  assert.match(recordCertificationFunction, /actual\.aspectWarpPassed === true/, "history certification must require saved aspect-warp verification");
   assert.match(recordCertificationFunction, /certification\.certified === true/, "history certification must require an explicit certified handoff flag");
   assert.match(recordCertificationFunction, /gate\.fourWayRepeat === true/, "history certification must require saved four-way-repeat approval");
   assert.match(recordCertificationFunction, /gate\.qualityPassed === true/, "history certification must require saved quality approval");
@@ -41,6 +43,7 @@ test("history and batch downloads only include certified records", () => {
   assert.match(recordCertificationFunction, /typeof gate\.preTiledPreviewScore === "number"/, "history certification must require the pre-tiled preview gate");
   assert.match(recordCertificationFunction, /typeof gate\.textureDensityScore === "number"/, "history certification must require the print texture-density gate");
   assert.match(recordCertificationFunction, /typeof gate\.outerFrameScore === "number"/, "history certification must require the outer-frame gate");
+  assert.match(recordCertificationFunction, /typeof gate\.aspectWarpRatio === "number"/, "history certification must require the aspect-warp gate");
   assert.match(selectedZipFunction, /item\.certified === true/, "batch zip should only include explicitly certified entries");
   assert.match(historyTemplateFunction, /data-certified="\$\{certified\}"/, "history checkbox should carry certification state");
   assert.match(historyTemplateFunction, /disabled/, "uncertified history records should render a disabled download control");
@@ -53,7 +56,7 @@ test("history certification rejects stale or partial metadata", () => {
     qualityPassed: true,
     certification: {
       certified: true,
-      actual: { printSpecPassed: true },
+      actual: { printSpecPassed: true, aspectWarpPassed: true },
       gate: {
         fourWayRepeat: true,
         qualityPassed: true,
@@ -64,6 +67,7 @@ test("history certification rejects stale or partial metadata", () => {
         preTiledPreviewScore: 0.4,
         textureDensityScore: 8.5,
         outerFrameScore: 0.8,
+        aspectWarpRatio: 1.02,
       },
     },
   };
@@ -78,7 +82,7 @@ test("history certification rejects stale or partial metadata", () => {
         qualityPassed: true,
       },
     },
-  }), false, "records missing the seam detail-loss, richness, layout, mirror-axis, pre-tiled, texture-density, and outer-frame gates should not be downloadable");
+  }), false, "records missing the seam detail-loss, richness, layout, mirror-axis, pre-tiled, texture-density, outer-frame, and aspect-warp gates should not be downloadable");
   assert.equal(recordHasCertifiedDownload({
     imageUrl: "/history/old.jpg",
     qualityPassed: true,
@@ -101,6 +105,8 @@ test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /preTiledPreviewScore: typeof check\.preTiledPreview\?\.score === "number" \? check\.preTiledPreview\.score : null/, "certification should retain pre-tiled preview score");
   assert.match(appSource, /textureDensityScore: typeof check\.textureDensity\?\.textureDensityScore === "number" \? check\.textureDensity\.textureDensityScore : null/, "certification should retain texture-density score");
   assert.match(appSource, /outerFrameScore: typeof check\.outerFrame\?\.score === "number" \? check\.outerFrame\.score : null/, "certification should retain outer-frame score");
+  assert.match(appSource, /aspectWarpPassed: check\.aspectWarp\?\.passed === true/, "certification should retain aspect-warp pass state");
+  assert.match(appSource, /aspectWarpRatio: typeof check\.aspectWarp\?\.warpRatio === "number" \? check\.aspectWarp\.warpRatio : null/, "certification should retain aspect-warp ratio");
   assert.match(appSource, /driftScore: Math\.max\(check\.driftHorizontal\?\.score \|\| 0, check\.driftVertical\?\.score \|\| 0\)/, "certification should retain edge-drift score");
   assert.match(serverSource, /certification: payload\.certification \|\| null/, "server should persist certification metadata");
 });
