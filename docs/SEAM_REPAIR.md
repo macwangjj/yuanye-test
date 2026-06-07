@@ -140,6 +140,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `layoutBalanceScore` and `edgeMotifActivity`, and history downloads require the current layout gate.
 - Tests cover all-over printable texture that must pass and a centered motif with quiet edges that must fail.
 
+## 0.7.28 Mirror Axis Gate
+
+- The quality gate now scans the center horizontal and vertical axes for mechanical mirror symmetry.
+- This catches AI or local seam repairs that make both sides of a seam numerically smooth but visibly mirrored, which creates an artificial axis after tiling.
+- `镜像轴痕明显，可修复` is routed to AI Offset repair instead of simple edge blending, because the fix needs fresh local variation rather than averaged pixels.
+- Certification metadata stores `mirrorAxisScore` and `mirrorAxisWorstScore`; history downloads require the current mirror-axis gate.
+- Tests cover normal all-over texture that must pass and a synthetic mirrored center-axis artifact that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

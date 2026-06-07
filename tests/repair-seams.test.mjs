@@ -176,6 +176,19 @@ test("pattern balance check rejects a single centered motif with quiet edges", (
   assert.ok(centeredBalance.centerToEdgeRatio > alloverBalance.centerToEdgeRatio * 2, `centered motif should be much more center-heavy; allover=${alloverBalance.centerToEdgeRatio} centered=${centeredBalance.centerToEdgeRatio}`);
 });
 
+test("mirror axis check rejects mechanical center-axis symmetry", () => {
+  const width = 180;
+  const height = 180;
+  const allover = makeSharpPrintPattern(width, height);
+  const mirrored = makeMirroredAxisPattern(width, height, "vertical");
+  const alloverMirror = measureMirrorAxisArtifactCore(allover, width, height, "vertical");
+  const mirroredAxis = measureMirrorAxisArtifactCore(mirrored, width, height, "vertical");
+
+  assert.equal(alloverMirror.mirrorRisk, false, `all-over textile texture should not look mechanically mirrored; got ${JSON.stringify(alloverMirror)}`);
+  assert.equal(mirroredAxis.mirrorRisk, true, `mechanical mirrored axis should be rejected; got ${JSON.stringify(mirroredAxis)}`);
+  assert.ok(mirroredAxis.worstScore > alloverMirror.worstScore * 2, `mirrored axis should score much worse; allover=${alloverMirror.worstScore} mirrored=${mirroredAxis.worstScore}`);
+});
+
 test("seam detail loss check rejects a soft blurred seam band", () => {
   const width = 160;
   const height = 160;
@@ -261,6 +274,34 @@ function makeCenteredMotifPattern(width, height) {
       data[i] = clamp(120 + (petal + rings + vein) * fade);
       data[i + 1] = clamp(94 + (petal * 0.7 + rings * 0.6 + vein * 0.5) * fade);
       data[i + 2] = clamp(82 + (petal * 0.45 + rings * 0.4 + vein * 0.35) * fade);
+    }
+  }
+
+  return data;
+}
+
+function makeMirroredAxisPattern(width, height, direction) {
+  const data = makeSharpPrintPattern(width, height);
+  const horizontal = direction === "horizontal";
+  const cross = horizontal ? height : width;
+  const length = horizontal ? width : height;
+  const center = Math.floor(cross / 2);
+  const band = Math.max(14, Math.round(cross * 0.16));
+
+  for (let along = 0; along < length; along += 1) {
+    for (let offset = 0; offset < band; offset += 1) {
+      const sourceCross = Math.max(0, center - 1 - offset);
+      const targetCross = Math.min(cross - 1, center + offset);
+      const sx = horizontal ? along : sourceCross;
+      const sy = horizontal ? sourceCross : along;
+      const tx = horizontal ? along : targetCross;
+      const ty = horizontal ? targetCross : along;
+      const source = (sy * width + sx) * 4;
+      const target = (ty * width + tx) * 4;
+      data[target] = data[source];
+      data[target + 1] = data[source + 1];
+      data[target + 2] = data[source + 2];
+      data[target + 3] = 255;
     }
   }
 
@@ -1129,6 +1170,110 @@ function measureCellActivityCore(data, width, height, x0, y0, x1, y1) {
   }
 
   return total / Math.max(1, count);
+}
+
+function measureMirrorAxisArtifactCore(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const axisIndex = Math.floor(cross / 2);
+  const radius = Math.max(8, Math.min(64, Math.round(cross * 0.038)));
+  const depthStep = Math.max(1, Math.round(radius / 10));
+  const sampleStep = Math.max(1, Math.round(length / 260));
+  const windowSize = Math.max(30, Math.min(132, Math.round(length / 22)));
+  const windowStep = Math.max(12, Math.round(windowSize * 0.5));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let mirrorWindows = 0;
+  let activeWindows = 0;
+  let mirrorSampleRatioTotal = 0;
+  let bestMirrorRatio = 1;
+
+  for (let start = 0; start < length; start += windowStep) {
+    const end = Math.min(length, start + windowSize);
+    let mirrorTotal = 0;
+    let crossActivityTotal = 0;
+    let alongActivityTotal = 0;
+    let suspiciousSamples = 0;
+    let activeSamples = 0;
+    let sampleCount = 0;
+
+    for (let along = start; along < end; along += sampleStep) {
+      const safeAlong = Math.min(length - 2, Math.max(1, along));
+      const nextAlong = Math.min(length - 1, safeAlong + sampleStep);
+
+      for (let depth = 0; depth < radius; depth += depthStep) {
+        const leftCross = Math.max(1, Math.min(cross - 2, axisIndex - 1 - depth));
+        const rightCross = Math.max(1, Math.min(cross - 2, axisIndex + depth));
+        const leftOuter = Math.max(1, Math.min(cross - 2, leftCross - depthStep));
+        const rightOuter = Math.max(1, Math.min(cross - 2, rightCross + depthStep));
+        const left = horizontal ? { x: safeAlong, y: leftCross } : { x: leftCross, y: safeAlong };
+        const right = horizontal ? { x: safeAlong, y: rightCross } : { x: rightCross, y: safeAlong };
+        const leftFar = horizontal ? { x: safeAlong, y: leftOuter } : { x: leftOuter, y: safeAlong };
+        const rightFar = horizontal ? { x: safeAlong, y: rightOuter } : { x: rightOuter, y: safeAlong };
+        const leftNext = horizontal ? { x: nextAlong, y: leftCross } : { x: leftCross, y: nextAlong };
+        const rightNext = horizontal ? { x: nextAlong, y: rightCross } : { x: rightCross, y: nextAlong };
+        const mirrorDiff = pixelDistance(data, width, left.x, left.y, right.x, right.y);
+        const crossActivity = (
+          pixelDistance(data, width, left.x, left.y, leftFar.x, leftFar.y) +
+          pixelDistance(data, width, right.x, right.y, rightFar.x, rightFar.y)
+        ) / 2;
+        const alongActivity = (
+          pixelDistance(data, width, left.x, left.y, leftNext.x, leftNext.y) +
+          pixelDistance(data, width, right.x, right.y, rightNext.x, rightNext.y)
+        ) / 2;
+        const activity = crossActivity * 0.75 + alongActivity * 0.25;
+
+        mirrorTotal += mirrorDiff;
+        crossActivityTotal += crossActivity;
+        alongActivityTotal += alongActivity;
+        sampleCount += 1;
+        if (activity > 6.5) activeSamples += 1;
+        if (activity > 7.2 && mirrorDiff < Math.max(5.2, activity * 0.42)) suspiciousSamples += 1;
+      }
+    }
+
+    const mirrorDiff = mirrorTotal / Math.max(1, sampleCount);
+    const crossActivity = crossActivityTotal / Math.max(1, sampleCount);
+    const alongActivity = alongActivityTotal / Math.max(1, sampleCount);
+    const activity = crossActivity * 0.75 + alongActivity * 0.25;
+    const mirrorRatio = mirrorDiff / Math.max(1, activity);
+    const suspiciousRatio = suspiciousSamples / Math.max(1, sampleCount);
+    const activeRatio = activeSamples / Math.max(1, sampleCount);
+    const mirrorExcess = Math.max(0, activity * 0.72 - mirrorDiff);
+    const windowScore = activeRatio > 0.22
+      ? mirrorExcess * (0.55 + Math.min(0.85, suspiciousRatio * 3.2)) + Math.max(0, 0.45 - mirrorRatio) * 8
+      : 0;
+
+    total += windowScore;
+    count += 1;
+    worstScore = Math.max(worstScore, windowScore);
+    bestMirrorRatio = Math.min(bestMirrorRatio, mirrorRatio);
+    mirrorSampleRatioTotal += suspiciousRatio;
+    if (activeRatio > 0.22) activeWindows += 1;
+    if (windowScore > 5.8 && suspiciousRatio > 0.18) mirrorWindows += 1;
+  }
+
+  const score = total / Math.max(1, count);
+  const mirrorWindowRatio = mirrorWindows / Math.max(1, count);
+  const activeWindowRatio = activeWindows / Math.max(1, count);
+  const mirrorSampleRatio = mirrorSampleRatioTotal / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    mirrorWindows,
+    activeWindows,
+    mirrorWindowRatio,
+    activeWindowRatio,
+    mirrorSampleRatio,
+    bestMirrorRatio,
+    mirrorRisk: (
+      worstScore > 12.5 ||
+      score > 6.8 ||
+      (mirrorWindows >= 4 && mirrorWindowRatio > 0.18 && activeWindowRatio > 0.2 && mirrorSampleRatio > 0.18 && score > 5.6 && worstScore > 8)
+    ),
+  };
 }
 
 function pixelDetailAt(data, width, height, x, y) {
