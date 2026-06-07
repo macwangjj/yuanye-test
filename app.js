@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.24-test";
+const clientVersion = "0.7.25-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -1058,13 +1058,17 @@ async function createFissionTask({ dataUrl, sourceName, parentPatternCode = "" }
 
 function toggleTaskSelection(task) {
   const key = `task:${task.id}`;
-  if (task.nodes.select.checked && task.resultJpgUrl && task.qualityPassed) {
+  const certified = taskHasCertifiedDownload(task);
+  if (task.nodes.select.checked && certified) {
     selectedDownloads.set(key, {
       name: `${task.patternCode || "YUANYE"}.jpg`,
       dataUrl: task.resultJpgUrl,
       certified: true,
     });
   } else {
+    if (task.nodes.select.checked && !certified) {
+      task.nodes.select.checked = false;
+    }
     selectedDownloads.delete(key);
   }
   updateBatchState();
@@ -3509,12 +3513,12 @@ function downloadJpg(task) {
 
 function updateBatchState() {
   if (!els.downloadSelected) return;
-  const count = selectedDownloads.size;
+  const count = [...selectedDownloads.values()].filter((item) => item.certified === true).length;
   els.downloadSelected.textContent = count ? `批量下载 (${count})` : "批量下载";
 }
 
 async function downloadSelectedZip() {
-  const items = [...selectedDownloads.values()].filter((item) => item.certified !== false);
+  const items = [...selectedDownloads.values()].filter((item) => item.certified === true);
   if (!items.length) {
     showToast("请先勾选已通过认证的图案");
     return;

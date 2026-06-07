@@ -117,6 +117,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - This keeps new safety gates from being bypassed through stale history metadata.
 - Tests cover the stricter history certification contract.
 
+## 0.7.25 Strict Batch Certification
+
+- Current-task batch selection now uses `taskHasCertifiedDownload`, the same gate used by single JPG downloads.
+- Batch ZIP creation only includes items with `certified === true`; missing or stale certification is rejected instead of treated as acceptable.
+- The batch button count now reflects only explicitly certified items.
+- Tests cover current-task selection, batch counts, and ZIP filtering.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

@@ -18,12 +18,16 @@ test("single-image download is gated by commercial certification", () => {
 });
 
 test("history and batch downloads only include certified records", () => {
+  const taskSelectionFunction = extractFunction(appSource, "toggleTaskSelection");
+  const batchStateFunction = extractFunction(appSource, "updateBatchState");
   const selectGroupFunction = extractFunction(appSource, "selectActiveHistoryGroup");
   const downloadGroupFunction = extractFunction(appSource, "downloadActiveHistoryGroup");
   const selectedZipFunction = extractFunction(appSource, "downloadSelectedZip");
   const historyTemplateFunction = extractFunction(appSource, "historyRecordTemplate");
   const recordCertificationFunction = extractFunction(appSource, "recordHasCertifiedDownload");
 
+  assert.match(taskSelectionFunction, /taskHasCertifiedDownload\(task\)/, "current task selection should use the same commercial certification gate as single downloads");
+  assert.match(batchStateFunction, /item\.certified === true/, "batch count should only include explicitly certified items");
   assert.match(selectGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history selection should filter to certified records");
   assert.match(downloadGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history group download should filter to certified records");
   assert.match(recordCertificationFunction, /actual\.printSpecPassed === true/, "history certification must require saved print spec verification");
@@ -31,7 +35,7 @@ test("history and batch downloads only include certified records", () => {
   assert.match(recordCertificationFunction, /gate\.fourWayRepeat === true/, "history certification must require saved four-way-repeat approval");
   assert.match(recordCertificationFunction, /gate\.qualityPassed === true/, "history certification must require saved quality approval");
   assert.match(recordCertificationFunction, /typeof gate\.seamDetailLossScore === "number"/, "history certification must require the seam detail-loss gate");
-  assert.match(selectedZipFunction, /certified !== false/, "batch zip should reject explicitly uncertified entries");
+  assert.match(selectedZipFunction, /item\.certified === true/, "batch zip should only include explicitly certified entries");
   assert.match(historyTemplateFunction, /data-certified="\$\{certified\}"/, "history checkbox should carry certification state");
   assert.match(historyTemplateFunction, /disabled/, "uncertified history records should render a disabled download control");
 });
