@@ -14,7 +14,7 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   set +a
 fi
 
-PORT="${PORT:-4185}"
+PORT="${PORT:-4186}"
 YUANYE_HOST="${YUANYE_HOST:-127.0.0.1}"
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://maimai.it.com/v1}"
 OPENAI_IMAGE_MODEL="${OPENAI_IMAGE_MODEL:-gpt-image-2}"

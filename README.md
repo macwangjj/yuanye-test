@@ -9,7 +9,7 @@
 1. 复制 `.env.example` 为 `.env`，把里面的 `OPENAI_API_KEY` 换成你的真实 Key。
    如果使用书标标接口，设置 `OPENAI_BASE_URL="https://api.shubiaobiao.com/v1"`。
 2. 双击 `start.command`。如果还没有配置 Key，它会让你粘贴一次并自动保存。
-3. 本机打开启动窗口里显示的地址，通常是 `http://127.0.0.1:4185`。
+3. 本机打开启动窗口里显示的地址，通常是 `http://127.0.0.1:4186`。
 4. 批量上传参考图，点击「一键开始生成」。
 5. 每张图生成完成后，点击「下载 JPG」。
 
@@ -17,9 +17,9 @@
 
 本机使用请双击 `start.command`。
 
-如果要让同办公室同网络的人一起访问，请双击 `start-lan.command`，它会监听 `0.0.0.0:4185`。同一个局域网的人可以访问：
+如果要让同办公室同网络的人一起访问，请双击 `start-lan.command`，它会监听 `0.0.0.0:4186`。同一个局域网的人可以访问：
 
-`http://你的电脑局域网 IP:4185`
+`http://你的电脑局域网 IP:4186`
 
 API Key 只放在运行服务的电脑环境变量里，不会发到其他人的浏览器。
 
@@ -57,7 +57,7 @@ OPENAI_API_KEY="你的接口 Key"
 OPENAI_BASE_URL="https://maimai.it.com/v1"
 OPENAI_IMAGE_MODEL="gpt-image-2"
 OPENAI_CHAT_MODEL="gpt-5.5"
-PORT=4185
+PORT=4186
 ```
 
 `OPENAI_BASE_URL` 可以填写根地址或 `/v1` 地址，程序会统一处理成 `/v1` 接口地址。

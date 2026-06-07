@@ -44,14 +44,14 @@ OPENAI_API_KEY="$OPENAI_API_KEY"
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://maimai.it.com/v1}"
 OPENAI_IMAGE_MODEL="${OPENAI_IMAGE_MODEL:-gpt-image-2}"
 OPENAI_CHAT_MODEL="${OPENAI_CHAT_MODEL:-gpt-5.5}"
-PORT="${PORT:-4185}"
+PORT="${PORT:-4186}"
 EOF
 
   log ""
   log ".env 已保存。"
 fi
 
-PORT="${PORT:-4185}"
+PORT="${PORT:-4186}"
 HEALTH_URL="http://127.0.0.1:$PORT/api/health"
 APP_URL="http://127.0.0.1:$PORT"
 
