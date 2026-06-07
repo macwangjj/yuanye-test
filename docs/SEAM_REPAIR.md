@@ -258,6 +258,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - The retry prompt now explicitly says to regenerate one true repeat tile and internally preview a 3x3 tiling before output, so the next attempt is less likely to repeat the same visible seam.
 - Tests cover hard-edge retry guidance, pre-tiled preview correction, high-detail regeneration constraints, deduplication, instruction capping, and both normal/fission prompt wiring.
 
+## 0.7.44 Strict Certified Fallback Candidate
+
+- Before automatic regeneration, structural edge-closure failures such as horizontal seams, vertical seams, corner return failures, and final-edge hard lines now get one deterministic strict-seamless candidate.
+- The candidate is discardable: it replaces the task image only when the full commercial seam check passes after re-export; otherwise the original failed image remains in place and the pipeline continues to regeneration.
+- Non-structural failures such as low information density, center-heavy layouts, pre-tiled previews, frames, aspect distortion, low-resolution upscales, compression blocks, sharpen halos, and pasted motif overlaps still go straight to enhancement or regeneration.
+- Tests cover structural allow-listing, non-structural rejection, extreme-score rejection, and the generation-loop order before auto-regeneration.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

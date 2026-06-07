@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.43-test";
+const clientVersion = "0.7.44-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -1104,6 +1104,17 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
         }
       }
 
+      if (shouldTryCertifiedSeamlessFallback(lastCheck)) {
+        phase = "严格闭合候选";
+        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在尝试严格闭合候选。`, 96);
+        const fallback = await tryCertifiedSeamlessFallback(task, lastCheck);
+        if (fallback?.accepted) {
+          lastCheck = fallback.check;
+          finalAction = "repair";
+          break;
+        }
+      }
+
       task.autoRegenerated = true;
       if (attempt <= maxAutoRegenerations) {
         setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，准备自动重生 ${attempt}/${maxAutoRegenerations}。`, 96);
@@ -1403,6 +1414,34 @@ async function forceSeamlessTask(task, options = {}) {
   }
 }
 
+async function tryCertifiedSeamlessFallback(task, baseCheck) {
+  if (!task.resultJpgUrl || !shouldTryCertifiedSeamlessFallback(baseCheck)) {
+    return { accepted: false, check: null };
+  }
+
+  const candidateJpgUrl = await makeStrictSeamlessJpg(task.resultJpgUrl, baseCheck);
+  const candidateCheck = applyAspectWarpCheck(await checkSeamQuality(candidateJpgUrl), task.exportMetrics?.aspectWarp);
+  if (!candidateCheck.passed) {
+    return { accepted: false, check: candidateCheck };
+  }
+
+  task.repairAttempts += 1;
+  task.resultJpgUrl = candidateJpgUrl;
+  task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+  task.seamCheck = candidateCheck;
+  task.repairCheck = candidateCheck;
+  task.seamScore = candidateCheck.score;
+  task.seamRating = candidateCheck.rating;
+  task.locallyRepaired = true;
+  task.qualityPassed = true;
+  task.nodes.message.textContent = seamCheckSummary(candidateCheck);
+  task.nodes.select.disabled = false;
+  task.nodes.select.checked = true;
+  toggleTaskSelection(task);
+  updateTaskDownloadGate(task);
+  return { accepted: true, check: candidateCheck };
+}
+
 async function aiOffsetRepairTask(task, previousCheck) {
   if (!task.resultJpgUrl) return null;
 
@@ -1690,6 +1729,39 @@ function shouldForcePeriodicRepair(check) {
     cornerJunctionWorst <= 90 &&
     driftWorst <= 90 &&
     mirrorWorst <= 90
+  );
+}
+
+function shouldTryCertifiedSeamlessFallback(check) {
+  if (!check || check.passed) return false;
+  const issueText = [
+    check.finalIssueType,
+    ...(Array.isArray(check.issues) ? check.issues : []),
+  ].filter(Boolean).join(" ");
+  if (!issueText) return false;
+
+  if (/花型信息量不足|花型分布过于集中|疑似平铺预览输出|画框留白|输出比例拉伸|成品规格|低清放大|成品清晰度不足|印花细节密度不足|色阶断层|压缩块噪点|锐化光晕|花型元素叠加/.test(issueText)) {
+    return false;
+  }
+  if (!/横档|竖档|回头没接|最终JPG边缘硬线|四角平铺交汇|边缘错位漂移|接缝过渡|平铺预览中心线|平铺边带|接缝细节发虚|细线接缝|轻微色差/.test(issueText)) {
+    return false;
+  }
+
+  const score = Number(check.score || 0);
+  const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
+  const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
+  const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
+  const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
+  return (
+    score <= 620 &&
+    edgeDominant <= 620 &&
+    borderWorst <= 1600 &&
+    localWorst <= 680 &&
+    internalWorst <= 520 &&
+    tiledWorst <= 720 &&
+    cornerWorst <= 720
   );
 }
 
