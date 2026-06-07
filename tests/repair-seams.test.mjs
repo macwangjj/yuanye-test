@@ -177,6 +177,19 @@ test("print upscale artifact check rejects low-resolution pixel-replicated outpu
   assert.ok(replicatedCheck.artifactScore > cleanCheck.artifactScore * 2, `upscaled artifact score should be much higher; clean=${cleanCheck.artifactScore} upscaled=${replicatedCheck.artifactScore}`);
 });
 
+test("print posterization check rejects visible tonal banding", () => {
+  const width = 180;
+  const height = 180;
+  const smooth = makeSmoothGradientPattern(width, height);
+  const posterized = posterizePrintPattern(smooth, 12);
+  const smoothCheck = measurePosterizationArtifactCore(smooth, width, height);
+  const posterizedCheck = measurePosterizationArtifactCore(posterized, width, height);
+
+  assert.equal(smoothCheck.posterizationRisk, false, `smooth tonal shading should pass; got ${JSON.stringify(smoothCheck)}`);
+  assert.equal(posterizedCheck.posterizationRisk, true, `visible tonal banding should be rejected; got ${JSON.stringify(posterizedCheck)}`);
+  assert.ok(posterizedCheck.toneBinRatio < smoothCheck.toneBinRatio * 0.5, `posterized output should have far fewer tone bins; smooth=${smoothCheck.toneBinRatio} posterized=${posterizedCheck.toneBinRatio}`);
+});
+
 test("print richness check rejects nearly empty low-information output", () => {
   const width = 160;
   const height = 160;
@@ -353,6 +366,36 @@ function makeSmoothPrintPattern(width, height) {
     }
   }
   return data;
+}
+
+function makeSmoothGradientPattern(width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const value = 82 +
+        (90 * x) / Math.max(1, width - 1) +
+        Math.sin(y * 0.04) * 34 +
+        Math.sin((x + y) * 0.025) * 20;
+      data[i] = clamp(value + 24);
+      data[i + 1] = clamp(value * 0.88 + 18);
+      data[i + 2] = clamp(value * 0.62 + 12);
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function posterizePrintPattern(source, levels) {
+  const output = new Uint8ClampedArray(source.length);
+  const step = 255 / Math.max(1, levels - 1);
+  for (let index = 0; index < source.length; index += 4) {
+    output[index] = clamp(Math.round(source[index] / step) * step);
+    output[index + 1] = clamp(Math.round(source[index + 1] / step) * step);
+    output[index + 2] = clamp(Math.round(source[index + 2] / step) * step);
+    output[index + 3] = 255;
+  }
+  return output;
 }
 
 function downsampleNearest(source, width, height, targetWidth, targetHeight) {
@@ -1357,6 +1400,101 @@ function measureUpscaleArtifactCore(data, width, height) {
     averageRun,
     diffBurstScore,
     upscaleArtifactRisk,
+  };
+}
+
+function measurePosterizationArtifactCore(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 360));
+  const rowStep = Math.max(sampleStep * 4, Math.round(height / 90));
+  const colStep = Math.max(sampleStep * 4, Math.round(width / 90));
+  const toneBins = new Set();
+  let flatPairs = 0;
+  let bandEdges = 0;
+  let moderateJumps = 0;
+  let diffCount = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let detailTotal = 0;
+  let gradientTotal = 0;
+  let sampleCount = 0;
+
+  function scanLine(length, luminanceAt) {
+    const values = [];
+    for (let position = 0; position < length; position += sampleStep) {
+      values.push(luminanceAt(position));
+    }
+    const diffs = [];
+    for (let index = 1; index < values.length; index += 1) {
+      diffs.push(Math.abs(values[index] - values[index - 1]));
+    }
+    for (let index = 0; index < diffs.length; index += 1) {
+      const diff = diffs[index];
+      const before = index > 0 ? diffs[index - 1] : diff;
+      const after = index < diffs.length - 1 ? diffs[index + 1] : diff;
+      diffCount += 1;
+      if (diff < 0.9) flatPairs += 1;
+      if (diff >= 2.6 && diff <= 16) {
+        moderateJumps += 1;
+        if (before < 1.1 || after < 1.1) {
+          bandEdges += 1;
+        }
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y += rowStep) {
+    scanLine(width, (x) => pixelLuminance(data, width, x, y));
+  }
+  for (let x = 0; x < width; x += colStep) {
+    scanLine(height, (y) => pixelLuminance(data, width, x, y));
+  }
+
+  const textureStep = Math.max(1, Math.round(Math.max(width, height) / 180));
+  for (let y = textureStep; y < height - textureStep; y += textureStep) {
+    for (let x = textureStep; x < width - textureStep; x += textureStep) {
+      const luminance = pixelLuminance(data, width, x, y);
+      const detail = pixelDetailAt(data, width, height, x, y);
+      toneBins.add(Math.round(luminance / 3));
+      lumTotal += luminance;
+      lumSquareTotal += luminance * luminance;
+      detailTotal += detail.detail;
+      gradientTotal += detail.gradient;
+      sampleCount += 1;
+    }
+  }
+
+  const flatPairRatio = flatPairs / Math.max(1, diffCount);
+  const bandEdgeRatio = bandEdges / Math.max(1, diffCount);
+  const moderateJumpRatio = moderateJumps / Math.max(1, diffCount);
+  const toneBinRatio = toneBins.size / 86;
+  const mean = lumTotal / Math.max(1, sampleCount);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, sampleCount) - mean * mean));
+  const detailScore = detailTotal / Math.max(1, sampleCount);
+  const gradientScore = gradientTotal / Math.max(1, sampleCount);
+  const posterizationScore = flatPairRatio * 14 +
+    bandEdgeRatio * 38 +
+    moderateJumpRatio * 8 +
+    Math.max(0, 0.36 - toneBinRatio) * 42 +
+    Math.max(0, 2.4 - detailScore) * 2.4;
+  const posterizationRisk = (
+    contrastScore > 10 &&
+    toneBinRatio < 0.29 &&
+    flatPairRatio > 0.68 &&
+    (bandEdgeRatio > 0.018 || detailScore < 1.6) &&
+    posterizationScore > 21.5
+  );
+
+  return {
+    posterizationScore,
+    flatPairRatio,
+    bandEdgeRatio,
+    moderateJumpRatio,
+    toneBinRatio,
+    toneBins: toneBins.size,
+    contrastScore,
+    detailScore,
+    gradientScore,
+    posterizationRisk,
   };
 }
 

@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.38-test";
+const clientVersion = "0.7.39-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -514,6 +514,7 @@ function recordHasCertifiedDownload(record) {
     gate.qualityPassed === true &&
     typeof gate.seamDetailLossScore === "number" &&
     typeof gate.upscaleArtifactScore === "number" &&
+    typeof gate.posterizationScore === "number" &&
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
@@ -599,6 +600,8 @@ function buildPrintCertification(task, actionType = "generate") {
       clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
       upscaleArtifactScore: typeof check.upscaleArtifact?.artifactScore === "number" ? check.upscaleArtifact.artifactScore : null,
       upscaleFlatPairRatio: typeof check.upscaleArtifact?.flatPairRatio === "number" ? check.upscaleArtifact.flatPairRatio : null,
+      posterizationScore: typeof check.posterization?.posterizationScore === "number" ? check.posterization.posterizationScore : null,
+      posterizationToneBinRatio: typeof check.posterization?.toneBinRatio === "number" ? check.posterization.toneBinRatio : null,
       richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
       activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
       layoutBalanceScore: typeof check.layoutBalance?.balanceScore === "number" ? check.layoutBalance.balanceScore : null,
@@ -1194,6 +1197,7 @@ async function finishPrintClarityTask(task, options = {}) {
     task.resultJpgUrl = await makeJpg(sourceUrl, makeTaskJpgOptions(task, {
       enhance: true,
       strength: Math.max(getEnhanceStrength(), 0.34),
+      toneDither: shouldToneDither(task.seamCheck),
     }));
     task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
     const check = await runSeamCheck(task, true);
@@ -1598,7 +1602,11 @@ function shouldForcePeriodicRepair(check) {
 }
 
 function shouldPrintClarityEnhance(check) {
-  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足") || issue.includes("细节密度不足") || issue.includes("放大痕迹")));
+  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足") || issue.includes("细节密度不足") || issue.includes("放大痕迹") || issue.includes("色阶断层")));
+}
+
+function shouldToneDither(check) {
+  return Boolean(check?.issues?.some((issue) => issue.includes("色阶断层")));
 }
 
 async function runSeamCheck(task, quiet = false) {
@@ -1671,6 +1679,7 @@ function seamCheckSummary(check) {
     `边框 ${Number(check.outerFrame?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     `放大 ${Number(check.upscaleArtifact?.artifactScore || 0).toFixed(2)}`,
+    `色阶 ${Number(check.posterization?.posterizationScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     `密度 ${(Number(check.textureDensity?.fineDetailRatio || 0) * 100).toFixed(0)}%`,
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
@@ -1698,6 +1707,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("画框留白边界，不可修复")) return "画框留白边界，不可修复";
   if (check.issues?.includes("镜像轴痕明显，可修复")) return "镜像轴痕明显，可修复";
   if (check.issues?.includes("低清放大痕迹，可增强")) return "低清放大痕迹，可增强";
+  if (check.issues?.includes("色阶断层，可增强")) return "色阶断层，可增强";
   if (check.issues?.includes("印花细节密度不足，可增强")) return "印花细节密度不足，可增强";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
@@ -1735,6 +1745,9 @@ function makeJpg(dataUrl, options = {}) {
         const clarityStrength = printClarityStrength(image, canvas.width, canvas.height, options);
         if (clarityStrength > 0) {
           enhanceClarity(ctx, canvas.width, canvas.height, clarityStrength);
+        }
+        if (options.toneDither) {
+          addPrintToneDither(ctx, canvas.width, canvas.height, 1.7);
         }
         if (options.repair !== false) {
           const precheck = measureSeamQuality(ctx, canvas.width, canvas.height);
@@ -2051,6 +2064,31 @@ function enhanceClarity(ctx, width, height, amount) {
   ctx.putImageData(imageData, 0, 0);
 }
 
+function addPrintToneDither(ctx, width, height, amount = 1.5) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const index = (row + x) * 4;
+      const localNoise = toneDitherNoise(x, y) * amount;
+      data[index] = clamp(data[index] + localNoise);
+      data[index + 1] = clamp(data[index + 1] + toneDitherNoise(x + 17, y + 3) * amount * 0.84);
+      data[index + 2] = clamp(data[index + 2] + toneDitherNoise(x + 5, y + 19) * amount * 0.72);
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function toneDitherNoise(x, y) {
+  let value = ((x * 374761393) ^ (y * 668265263)) | 0;
+  value = Math.imul(value ^ (value >>> 13), 1274126177);
+  value = (value ^ (value >>> 16)) >>> 0;
+  return value / 2147483647.5 - 1;
+}
+
 function printClarityStrength(image, targetWidth, targetHeight, options = {}) {
   const upscale = Math.max(targetWidth / Math.max(1, image.width), targetHeight / Math.max(1, image.height));
   const base = options.printFinish === false
@@ -2170,6 +2208,7 @@ function measureSeamQuality(ctx, width, height) {
   const driftVertical = measureEdgeDrift(data, width, height, "vertical");
   const clarity = measurePrintClarity(data, width, height);
   const upscaleArtifact = measureUpscaleArtifact(data, width, height);
+  const posterization = measurePosterizationArtifact(data, width, height);
   const richness = measurePrintRichness(data, width, height);
   const textureDensity = measurePrintTextureDensity(data, width, height);
   const layoutBalance = measurePatternBalance(data, width, height);
@@ -2233,6 +2272,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && seamDetailRisk) issues.push("接缝细节发虚，可修复");
   if (!issues.length && clarity.blurRisk) issues.push("成品清晰度不足，可增强");
   if (!issues.length && upscaleArtifact.upscaleArtifactRisk) issues.push("低清放大痕迹，可增强");
+  if (!issues.length && posterization.posterizationRisk) issues.push("色阶断层，可增强");
   if (!issues.length && textureDensity.lowTextureDensityRisk) issues.push("印花细节密度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
@@ -2271,6 +2311,7 @@ function measureSeamQuality(ctx, width, height) {
     !outerFrame.frameRisk &&
     !richness.lowInformationRisk &&
     !upscaleArtifact.upscaleArtifactRisk &&
+    !posterization.posterizationRisk &&
     !textureDensity.lowTextureDensityRisk &&
     !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
@@ -2310,6 +2351,7 @@ function measureSeamQuality(ctx, width, height) {
     preTiledPreview,
     clarity,
     upscaleArtifact,
+    posterization,
     richness,
     textureDensity,
     layoutBalance,
@@ -3342,6 +3384,101 @@ function measureUpscaleArtifact(data, width, height) {
     averageRun,
     diffBurstScore,
     upscaleArtifactRisk,
+  };
+}
+
+function measurePosterizationArtifact(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 360));
+  const rowStep = Math.max(sampleStep * 4, Math.round(height / 90));
+  const colStep = Math.max(sampleStep * 4, Math.round(width / 90));
+  const toneBins = new Set();
+  let flatPairs = 0;
+  let bandEdges = 0;
+  let moderateJumps = 0;
+  let diffCount = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let detailTotal = 0;
+  let gradientTotal = 0;
+  let sampleCount = 0;
+
+  function scanLine(length, luminanceAt) {
+    const values = [];
+    for (let position = 0; position < length; position += sampleStep) {
+      values.push(luminanceAt(position));
+    }
+    const diffs = [];
+    for (let index = 1; index < values.length; index += 1) {
+      diffs.push(Math.abs(values[index] - values[index - 1]));
+    }
+    for (let index = 0; index < diffs.length; index += 1) {
+      const diff = diffs[index];
+      const before = index > 0 ? diffs[index - 1] : diff;
+      const after = index < diffs.length - 1 ? diffs[index + 1] : diff;
+      diffCount += 1;
+      if (diff < 0.9) flatPairs += 1;
+      if (diff >= 2.6 && diff <= 16) {
+        moderateJumps += 1;
+        if (before < 1.1 || after < 1.1) {
+          bandEdges += 1;
+        }
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y += rowStep) {
+    scanLine(width, (x) => pixelLuminance(data, width, x, y));
+  }
+  for (let x = 0; x < width; x += colStep) {
+    scanLine(height, (y) => pixelLuminance(data, width, x, y));
+  }
+
+  const textureStep = Math.max(1, Math.round(Math.max(width, height) / 180));
+  for (let y = textureStep; y < height - textureStep; y += textureStep) {
+    for (let x = textureStep; x < width - textureStep; x += textureStep) {
+      const luminance = pixelLuminance(data, width, x, y);
+      const detail = pixelDetailAt(data, width, height, x, y);
+      toneBins.add(Math.round(luminance / 3));
+      lumTotal += luminance;
+      lumSquareTotal += luminance * luminance;
+      detailTotal += detail.detail;
+      gradientTotal += detail.gradient;
+      sampleCount += 1;
+    }
+  }
+
+  const flatPairRatio = flatPairs / Math.max(1, diffCount);
+  const bandEdgeRatio = bandEdges / Math.max(1, diffCount);
+  const moderateJumpRatio = moderateJumps / Math.max(1, diffCount);
+  const toneBinRatio = toneBins.size / 86;
+  const mean = lumTotal / Math.max(1, sampleCount);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, sampleCount) - mean * mean));
+  const detailScore = detailTotal / Math.max(1, sampleCount);
+  const gradientScore = gradientTotal / Math.max(1, sampleCount);
+  const posterizationScore = flatPairRatio * 14 +
+    bandEdgeRatio * 38 +
+    moderateJumpRatio * 8 +
+    Math.max(0, 0.36 - toneBinRatio) * 42 +
+    Math.max(0, 2.4 - detailScore) * 2.4;
+  const posterizationRisk = (
+    contrastScore > 10 &&
+    toneBinRatio < 0.29 &&
+    flatPairRatio > 0.68 &&
+    (bandEdgeRatio > 0.018 || detailScore < 1.6) &&
+    posterizationScore > 21.5
+  );
+
+  return {
+    posterizationScore,
+    flatPairRatio,
+    bandEdgeRatio,
+    moderateJumpRatio,
+    toneBinRatio,
+    toneBins: toneBins.size,
+    contrastScore,
+    detailScore,
+    gradientScore,
+    posterizationRisk,
   };
 }
 

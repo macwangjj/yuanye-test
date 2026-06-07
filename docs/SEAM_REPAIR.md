@@ -219,6 +219,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `upscaleArtifactScore` and `upscaleFlatPairRatio`; history downloads require the current upscale-artifact gate.
 - Tests cover a clean printable texture that must pass and a pixel-replicated low-resolution output that must fail.
 
+## 0.7.39 Posterization / Tone-Banding Gate
+
+- The quality gate now checks whether shadows and gradients have collapsed into visible hard tone steps instead of smooth printable transitions.
+- The detector combines long flat tonal plateaus, moderate jump edges, available luminance-bin count, contrast, and local detail so limited-palette line art is not rejected merely for using fewer colors.
+- The issue is reported as `色阶断层，可增强`. The enhancement path applies a very light deterministic print-tone dither before rechecking, which can break up hard bands without changing the pattern layout.
+- Certification metadata stores `posterizationScore` and `posterizationToneBinRatio`; history downloads require the current posterization gate.
+- Tests cover smooth tonal shading that must pass and posterized 12-level shading that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
