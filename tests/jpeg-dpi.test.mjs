@@ -37,6 +37,20 @@ test("withJpegDpi inserts JFIF density when browser JPEG has no APP0 segment", (
   assert.deepEqual([...output.slice(20, 26)], [...jpegWithoutJfif.slice(2, 8)], "original JPEG data should follow inserted APP0 segment");
 });
 
+test("measurePrintSpec passes only target pixels and 300 dpi metadata", () => {
+  const { measurePrintSpec } = loadJpegDpiHelpers();
+  const correct = measurePrintSpec(bytesToDataUrl(makeJpegWithJfif(300)), 4961, 7559);
+  const wrongSize = measurePrintSpec(bytesToDataUrl(makeJpegWithJfif(300)), 4096, 4096);
+  const wrongDpi = measurePrintSpec(bytesToDataUrl(makeJpegWithJfif(72)), 4961, 7559);
+
+  assert.equal(correct.passed, true, `target print spec should pass; got ${JSON.stringify(correct)}`);
+  assert.equal(wrongSize.passed, false, "wrong pixel dimensions must fail print spec");
+  assert.equal(wrongDpi.passed, false, "wrong DPI metadata must fail print spec");
+  assert.equal(correct.dpiUnit, "inch");
+  assert.equal(correct.dpiX, 300);
+  assert.equal(correct.dpiY, 300);
+});
+
 function loadJpegDpiHelpers() {
   const names = [
     "withJpegDpi",
@@ -46,9 +60,11 @@ function loadJpegDpiHelpers() {
     "insertJfifDpiSegment",
     "buildJfifDpiSegment",
     "bytesToJpegDataUrl",
+    "measurePrintSpec",
+    "readJpegDpi",
   ];
   const source = names.map((name) => extractFunction(appSource, name)).join("\n");
-  const factory = new Function("atob", "btoa", `${source}\nreturn { withJpegDpi };`);
+  const factory = new Function("atob", "btoa", `${source}\nreturn { withJpegDpi, measurePrintSpec };`);
   return factory(
     (value) => Buffer.from(value, "base64").toString("binary"),
     (value) => Buffer.from(value, "binary").toString("base64"),

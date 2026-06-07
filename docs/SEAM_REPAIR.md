@@ -94,6 +94,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata records the DPI contract as `JFIF inch density`.
 - Tests cover both existing-JFIF and missing-JFIF JPEG outputs.
 
+## 0.7.22 Print-Spec Certification Gate
+
+- Every seam check now also verifies the actual exported JPG dimensions and DPI metadata.
+- A file can only be certified for commercial download when the actual image is `4961 x 7559 px`, is JPG, and reads as 300 dpi through JFIF inch density.
+- Task downloads and history downloads now require `printSpecPassed: true`, so older or partially verified records are not treated as printable handoff files.
+- Certification metadata stores the actual width, height, DPI values, DPI unit, and `printSpecPassed` result.
+- Tests cover the print-spec helper and the stricter certification gate.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

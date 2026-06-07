@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.21-test";
+const clientVersion = "0.7.22-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -478,11 +478,11 @@ function markTaskDownloaded(task) {
 }
 
 function taskHasCertifiedDownload(task) {
-  return Boolean(task?.resultJpgUrl && task?.qualityPassed === true && task?.seamCheck?.passed === true);
+  return Boolean(task?.resultJpgUrl && task?.qualityPassed === true && task?.seamCheck?.passed === true && task?.seamCheck?.printSpec?.passed === true);
 }
 
 function recordHasCertifiedDownload(record) {
-  return Boolean(record?.imageUrl && record?.qualityPassed === true && record?.seamCheck?.passed !== false);
+  return Boolean(record?.imageUrl && record?.qualityPassed === true && record?.seamCheck?.passed !== false && record?.certification?.actual?.printSpecPassed === true);
 }
 
 function updateTaskDownloadGate(task) {
@@ -516,6 +516,14 @@ function buildPrintCertification(task, actionType = "generate") {
       dpiMetadata: "JFIF inch density",
       format: "jpg",
       use: "digital textile print",
+    },
+    actual: {
+      widthPx: check.printSpec?.widthPx ?? null,
+      heightPx: check.printSpec?.heightPx ?? null,
+      dpiX: check.printSpec?.dpiX ?? null,
+      dpiY: check.printSpec?.dpiY ?? null,
+      dpiUnit: check.printSpec?.dpiUnit ?? "",
+      printSpecPassed: check.printSpec?.passed === true,
     },
     gate: {
       fourWayRepeat: check.passed === true,
@@ -1532,7 +1540,9 @@ function checkSeamQuality(dataUrl) {
         canvas.height = Math.max(1, Math.round(image.height * scale));
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(measureSeamQuality(ctx, canvas.width, canvas.height));
+        const check = measureSeamQuality(ctx, canvas.width, canvas.height);
+        applyPrintSpecCheck(check, measurePrintSpec(dataUrl, image.width, image.height));
+        resolve(check);
       } catch (error) {
         reject(error);
       }
@@ -1553,6 +1563,7 @@ function seamCheckSummary(check) {
     `交汇 ${Number(check.tiledCorner?.score || 0).toFixed(2)}`,
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
+    check.printSpec?.passed === true ? "规格通过" : "规格失败",
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
   return check.passed
@@ -1566,6 +1577,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("横档未衔接，不可修复")) return "横档未衔接，不可修复";
   if (check.issues?.includes("竖档未衔接，不可修复")) return "竖档未衔接，不可修复";
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
+  if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
   return "检测到接缝风险";
 }
 
@@ -3266,6 +3278,71 @@ function bytesToJpegDataUrl(bytes, marker) {
     output += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
   return marker + btoa(output);
+}
+
+function measurePrintSpec(dataUrl, widthPx, heightPx) {
+  const expected = { widthPx: 4961, heightPx: 7559, dpi: 300 };
+  const density = readJpegDpi(dataUrl);
+  const formatPassed = String(dataUrl || "").startsWith("data:image/jpeg;base64,");
+  const dimensionsPassed = widthPx === expected.widthPx && heightPx === expected.heightPx;
+  const dpiPassed = density.dpiX === expected.dpi && density.dpiY === expected.dpi && density.unit === 1;
+  const issues = [];
+  if (!formatPassed) issues.push("格式不是 JPG");
+  if (!dimensionsPassed) issues.push(`像素 ${widthPx}×${heightPx}，应为 ${expected.widthPx}×${expected.heightPx}`);
+  if (!dpiPassed) issues.push(`DPI ${density.dpiX || "未知"}×${density.dpiY || "未知"}，应为 ${expected.dpi}`);
+
+  return {
+    widthPx,
+    heightPx,
+    expectedWidthPx: expected.widthPx,
+    expectedHeightPx: expected.heightPx,
+    dpiX: density.dpiX,
+    dpiY: density.dpiY,
+    dpiUnit: density.unitName,
+    format: formatPassed ? "jpg" : "unknown",
+    formatPassed,
+    dimensionsPassed,
+    dpiPassed,
+    passed: formatPassed && dimensionsPassed && dpiPassed,
+    issues,
+  };
+}
+
+function readJpegDpi(dataUrl) {
+  const marker = "data:image/jpeg;base64,";
+  if (!String(dataUrl || "").startsWith(marker)) {
+    return { unit: 0, unitName: "unknown", dpiX: null, dpiY: null };
+  }
+  const bytes = jpegDataUrlToBytes(dataUrl, marker);
+  const offset = findJfifSegmentOffset(bytes);
+  if (offset < 0) return { unit: 0, unitName: "unknown", dpiX: null, dpiY: null };
+  const unit = bytes[offset + 11];
+  const xDensity = (bytes[offset + 12] << 8) | bytes[offset + 13];
+  const yDensity = (bytes[offset + 14] << 8) | bytes[offset + 15];
+  if (unit === 1) {
+    return { unit, unitName: "inch", dpiX: xDensity, dpiY: yDensity };
+  }
+  if (unit === 2) {
+    return { unit, unitName: "cm", dpiX: Math.round(xDensity * 2.54), dpiY: Math.round(yDensity * 2.54) };
+  }
+  return { unit, unitName: "none", dpiX: null, dpiY: null };
+}
+
+function applyPrintSpecCheck(check, printSpec) {
+  check.printSpec = printSpec;
+  if (printSpec.passed) {
+    check.rating = seamRating(check);
+    return check;
+  }
+
+  if (!check.issues.includes("成品规格不正确，不可下载")) {
+    check.issues.unshift("成品规格不正确，不可下载");
+  }
+  check.passed = false;
+  check.repairability = "unrepairable";
+  check.finalIssueType = "成品规格不正确，不可下载";
+  check.rating = seamRating(check);
+  return check;
 }
 
 function downloadJpg(task) {
