@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.26-test";
+const clientVersion = "0.7.27-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -493,7 +493,8 @@ function recordHasCertifiedDownload(record) {
     gate.fourWayRepeat === true &&
     gate.qualityPassed === true &&
     typeof gate.seamDetailLossScore === "number" &&
-    typeof gate.richnessScore === "number"
+    typeof gate.richnessScore === "number" &&
+    typeof gate.layoutBalanceScore === "number"
   );
 }
 
@@ -552,6 +553,8 @@ function buildPrintCertification(task, actionType = "generate") {
       clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
       richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
       activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
+      layoutBalanceScore: typeof check.layoutBalance?.balanceScore === "number" ? check.layoutBalance.balanceScore : null,
+      edgeMotifActivity: typeof check.layoutBalance?.edgeActivity === "number" ? check.layoutBalance.edgeActivity : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
     },
   };
@@ -1441,7 +1444,7 @@ function shouldHybridSeamRepair(check) {
 
 function shouldEdgeBlendRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中"))) return false;
   if (check.issues?.some((issue) => issue.includes("花型元素叠加") || issue.includes("回头没接"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
@@ -1475,7 +1478,7 @@ function shouldEdgeBlendRepair(check) {
 
 function shouldAiOffsetRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
@@ -1501,7 +1504,7 @@ function shouldAiOffsetRepair(check) {
 
 function shouldForcePeriodicRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中"))) return false;
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
@@ -1597,6 +1600,7 @@ function seamCheckSummary(check) {
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
+    `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
     check.printSpec?.passed === true ? "规格通过" : "规格失败",
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
@@ -1612,6 +1616,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("竖档未衔接，不可修复")) return "竖档未衔接，不可修复";
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
   if (check.issues?.includes("花型信息量不足，不可修复")) return "花型信息量不足，不可修复";
+  if (check.issues?.includes("花型分布过于集中，不可修复")) return "花型分布过于集中，不可修复";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
   return "检测到接缝风险";
@@ -2055,6 +2060,7 @@ function measureSeamQuality(ctx, width, height) {
   const driftVertical = measureEdgeDrift(data, width, height, "vertical");
   const clarity = measurePrintClarity(data, width, height);
   const richness = measurePrintRichness(data, width, height);
+  const layoutBalance = measurePatternBalance(data, width, height);
   const peakLimitH = Math.max(18, Math.round((band * samplesX) * 0.12));
   const peakLimitV = Math.max(18, Math.round((band * samplesY) * 0.12));
   const peakRatioH = horizontalPeaks / Math.max(1, band * samplesX);
@@ -2095,6 +2101,7 @@ function measureSeamQuality(ctx, width, height) {
   if (severeVertical) issues.push("竖档未衔接，不可修复");
   if (severeCorner) issues.push("回头没接，不可修复");
   if (!issues.length && richness.lowInformationRisk) issues.push("花型信息量不足，不可修复");
+  if (!issues.length && layoutBalance.centerDominanceRisk) issues.push("花型分布过于集中，不可修复");
   if (!issues.length && driftRisk) issues.push("边缘错位漂移，可修复");
   if (!issues.length && cornerJunctionRisk) issues.push("四角平铺交汇明显，可修复");
   if (overlayRisk && !driftRisk && !severeHorizontal && !severeVertical) issues.push("花型元素叠加，不可修复");
@@ -2132,6 +2139,7 @@ function measureSeamQuality(ctx, width, height) {
     maxDriftWorst <= 14 &&
     !driftRisk &&
     !richness.lowInformationRisk &&
+    !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
   );
   if (!passed && repairability === "pass") {
@@ -2165,6 +2173,7 @@ function measureSeamQuality(ctx, width, height) {
     driftVertical,
     clarity,
     richness,
+    layoutBalance,
     repairability: passed ? "pass" : repairability,
     finalIssueType,
     issues,
@@ -3082,6 +3091,88 @@ function measurePrintRichness(data, width, height) {
     colorSpreadScore,
     lowInformationRisk,
   };
+}
+
+function measurePatternBalance(data, width, height) {
+  const columns = 5;
+  const rows = 5;
+  const cellScores = [];
+  let total = 0;
+  let activeCells = 0;
+  let centerTotal = 0;
+  let centerCount = 0;
+  let edgeTotal = 0;
+  let edgeCount = 0;
+  let maxCell = 0;
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x0 = Math.floor((column / columns) * width);
+      const x1 = Math.floor(((column + 1) / columns) * width);
+      const y0 = Math.floor((row / rows) * height);
+      const y1 = Math.floor(((row + 1) / rows) * height);
+      const activity = measureCellActivity(data, width, height, x0, y0, x1, y1);
+      const centerCell = column >= 1 && column <= 3 && row >= 1 && row <= 3;
+      const edgeCell = column === 0 || column === columns - 1 || row === 0 || row === rows - 1;
+
+      cellScores.push(activity);
+      total += activity;
+      maxCell = Math.max(maxCell, activity);
+      if (activity > 4.4) activeCells += 1;
+      if (centerCell) {
+        centerTotal += activity;
+        centerCount += 1;
+      }
+      if (edgeCell) {
+        edgeTotal += activity;
+        edgeCount += 1;
+      }
+    }
+  }
+
+  const average = total / Math.max(1, cellScores.length);
+  const centerActivity = centerTotal / Math.max(1, centerCount);
+  const edgeActivity = edgeTotal / Math.max(1, edgeCount);
+  const activeCellRatio = activeCells / Math.max(1, cellScores.length);
+  const centerToEdgeRatio = centerActivity / Math.max(0.8, edgeActivity);
+  const dominanceRatio = maxCell / Math.max(1, average);
+  const balanceScore = Math.max(0, centerToEdgeRatio - 1.7) * 2.4 + Math.max(0, dominanceRatio - 3.2) * 1.2 + Math.max(0, 0.38 - activeCellRatio) * 8;
+  const centerDominanceRisk = (
+    centerActivity > 4.8 &&
+    edgeActivity < 2.9 &&
+    activeCellRatio < 0.34 &&
+    centerToEdgeRatio > 3.4 &&
+    dominanceRatio > 4.2 &&
+    balanceScore > 6.2
+  );
+
+  return {
+    balanceScore,
+    centerActivity,
+    edgeActivity,
+    activeCellRatio,
+    centerToEdgeRatio,
+    dominanceRatio,
+    centerDominanceRisk,
+  };
+}
+
+function measureCellActivity(data, width, height, x0, y0, x1, y1) {
+  const cellWidth = Math.max(1, x1 - x0);
+  const cellHeight = Math.max(1, y1 - y0);
+  const step = Math.max(1, Math.round(Math.max(cellWidth, cellHeight) / 18));
+  let total = 0;
+  let count = 0;
+
+  for (let y = Math.max(1, y0 + step); y < Math.min(height - 1, y1 - step); y += step) {
+    for (let x = Math.max(1, x0 + step); x < Math.min(width - 1, x1 - step); x += step) {
+      const detail = pixelDetailAt(data, width, height, x, y);
+      total += detail.gradient * 0.42 + detail.detail * 0.92;
+      count += 1;
+    }
+  }
+
+  return total / Math.max(1, count);
 }
 
 function pixelDetailAt(data, width, height, x, y) {

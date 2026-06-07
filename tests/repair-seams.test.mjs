@@ -163,6 +163,19 @@ test("print richness check rejects nearly empty low-information output", () => {
   assert.ok(sharpRichness.richnessScore > flatRichness.richnessScore * 3, `pattern richness should be much higher; sharp=${sharpRichness.richnessScore} flat=${flatRichness.richnessScore}`);
 });
 
+test("pattern balance check rejects a single centered motif with quiet edges", () => {
+  const width = 180;
+  const height = 180;
+  const allover = makeSharpPrintPattern(width, height);
+  const centered = makeCenteredMotifPattern(width, height);
+  const alloverBalance = measurePatternBalanceCore(allover, width, height);
+  const centeredBalance = measurePatternBalanceCore(centered, width, height);
+
+  assert.equal(alloverBalance.centerDominanceRisk, false, `all-over textile layout should pass balance gate; got ${JSON.stringify(alloverBalance)}`);
+  assert.equal(centeredBalance.centerDominanceRisk, true, `centered motif layout should be rejected; got ${JSON.stringify(centeredBalance)}`);
+  assert.ok(centeredBalance.centerToEdgeRatio > alloverBalance.centerToEdgeRatio * 2, `centered motif should be much more center-heavy; allover=${alloverBalance.centerToEdgeRatio} centered=${centeredBalance.centerToEdgeRatio}`);
+});
+
 test("seam detail loss check rejects a soft blurred seam band", () => {
   const width = 160;
   const height = 160;
@@ -225,6 +238,32 @@ function makeFlatPrint(width, height, color) {
       data[i + 3] = 255;
     }
   }
+  return data;
+}
+
+function makeCenteredMotifPattern(width, height) {
+  const data = makeFlatPrint(width, height, [176, 168, 152]);
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(width, height) * 0.24;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = x - centerX;
+      const dy = y - centerY;
+      const distance = Math.hypot(dx, dy);
+      if (distance > radius) continue;
+      const i = (y * width + x) * 4;
+      const petal = Math.sin(Math.atan2(dy, dx) * 8) * 36;
+      const rings = Math.sin(distance * 0.52) * 42;
+      const vein = ((x + y) % 13 === 0 || (x * 2 - y) % 17 === 0) ? 88 : 0;
+      const fade = 1 - distance / radius;
+      data[i] = clamp(120 + (petal + rings + vein) * fade);
+      data[i + 1] = clamp(94 + (petal * 0.7 + rings * 0.6 + vein * 0.5) * fade);
+      data[i + 2] = clamp(82 + (petal * 0.45 + rings * 0.4 + vein * 0.35) * fade);
+    }
+  }
+
   return data;
 }
 
@@ -1008,6 +1047,88 @@ function measurePrintRichnessCore(data, width, height) {
     colorSpreadScore,
     lowInformationRisk,
   };
+}
+
+function measurePatternBalanceCore(data, width, height) {
+  const columns = 5;
+  const rows = 5;
+  const cellScores = [];
+  let total = 0;
+  let activeCells = 0;
+  let centerTotal = 0;
+  let centerCount = 0;
+  let edgeTotal = 0;
+  let edgeCount = 0;
+  let maxCell = 0;
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x0 = Math.floor((column / columns) * width);
+      const x1 = Math.floor(((column + 1) / columns) * width);
+      const y0 = Math.floor((row / rows) * height);
+      const y1 = Math.floor(((row + 1) / rows) * height);
+      const activity = measureCellActivityCore(data, width, height, x0, y0, x1, y1);
+      const centerCell = column >= 1 && column <= 3 && row >= 1 && row <= 3;
+      const edgeCell = column === 0 || column === columns - 1 || row === 0 || row === rows - 1;
+
+      cellScores.push(activity);
+      total += activity;
+      maxCell = Math.max(maxCell, activity);
+      if (activity > 4.4) activeCells += 1;
+      if (centerCell) {
+        centerTotal += activity;
+        centerCount += 1;
+      }
+      if (edgeCell) {
+        edgeTotal += activity;
+        edgeCount += 1;
+      }
+    }
+  }
+
+  const average = total / Math.max(1, cellScores.length);
+  const centerActivity = centerTotal / Math.max(1, centerCount);
+  const edgeActivity = edgeTotal / Math.max(1, edgeCount);
+  const activeCellRatio = activeCells / Math.max(1, cellScores.length);
+  const centerToEdgeRatio = centerActivity / Math.max(0.8, edgeActivity);
+  const dominanceRatio = maxCell / Math.max(1, average);
+  const balanceScore = Math.max(0, centerToEdgeRatio - 1.7) * 2.4 + Math.max(0, dominanceRatio - 3.2) * 1.2 + Math.max(0, 0.38 - activeCellRatio) * 8;
+  const centerDominanceRisk = (
+    centerActivity > 4.8 &&
+    edgeActivity < 2.9 &&
+    activeCellRatio < 0.34 &&
+    centerToEdgeRatio > 3.4 &&
+    dominanceRatio > 4.2 &&
+    balanceScore > 6.2
+  );
+
+  return {
+    balanceScore,
+    centerActivity,
+    edgeActivity,
+    activeCellRatio,
+    centerToEdgeRatio,
+    dominanceRatio,
+    centerDominanceRisk,
+  };
+}
+
+function measureCellActivityCore(data, width, height, x0, y0, x1, y1) {
+  const cellWidth = Math.max(1, x1 - x0);
+  const cellHeight = Math.max(1, y1 - y0);
+  const step = Math.max(1, Math.round(Math.max(cellWidth, cellHeight) / 18));
+  let total = 0;
+  let count = 0;
+
+  for (let y = Math.max(1, y0 + step); y < Math.min(height - 1, y1 - step); y += step) {
+    for (let x = Math.max(1, x0 + step); x < Math.min(width - 1, x1 - step); x += step) {
+      const detail = pixelDetailAt(data, width, height, x, y);
+      total += detail.gradient * 0.42 + detail.detail * 0.92;
+      count += 1;
+    }
+  }
+
+  return total / Math.max(1, count);
 }
 
 function pixelDetailAt(data, width, height, x, y) {

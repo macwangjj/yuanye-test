@@ -132,6 +132,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `richnessScore` and `activeTextureRatio`, and history downloads require the current `richnessScore` gate.
 - Tests cover sharp printable patterns that must pass and near-empty outputs that must fail.
 
+## 0.7.27 Layout Balance Gate
+
+- The quality gate now measures motif activity across a 5x5 grid and compares center activity against the outer ring.
+- Outputs with one dominant centered motif and very quiet edges are rejected as `花型分布过于集中，不可修复`, because they tile into a visible grid rather than a wearable all-over repeat.
+- This issue is routed to regeneration instead of seam repair; local seam tools cannot rebalance the motif layout.
+- Certification metadata stores `layoutBalanceScore` and `edgeMotifActivity`, and history downloads require the current layout gate.
+- Tests cover all-over printable texture that must pass and a centered motif with quiet edges that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

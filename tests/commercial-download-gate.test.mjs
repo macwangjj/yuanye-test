@@ -36,6 +36,7 @@ test("history and batch downloads only include certified records", () => {
   assert.match(recordCertificationFunction, /gate\.qualityPassed === true/, "history certification must require saved quality approval");
   assert.match(recordCertificationFunction, /typeof gate\.seamDetailLossScore === "number"/, "history certification must require the seam detail-loss gate");
   assert.match(recordCertificationFunction, /typeof gate\.richnessScore === "number"/, "history certification must require the print richness gate");
+  assert.match(recordCertificationFunction, /typeof gate\.layoutBalanceScore === "number"/, "history certification must require the layout balance gate");
   assert.match(selectedZipFunction, /item\.certified === true/, "batch zip should only include explicitly certified entries");
   assert.match(historyTemplateFunction, /data-certified="\$\{certified\}"/, "history checkbox should carry certification state");
   assert.match(historyTemplateFunction, /disabled/, "uncertified history records should render a disabled download control");
@@ -54,6 +55,7 @@ test("history certification rejects stale or partial metadata", () => {
         qualityPassed: true,
         seamDetailLossScore: 2.4,
         richnessScore: 9.8,
+        layoutBalanceScore: 1.3,
       },
     },
   };
@@ -68,7 +70,7 @@ test("history certification rejects stale or partial metadata", () => {
         qualityPassed: true,
       },
     },
-  }), false, "records missing the seam detail-loss and richness gates should not be downloadable");
+  }), false, "records missing the seam detail-loss, richness, and layout gates should not be downloadable");
   assert.equal(recordHasCertifiedDownload({
     imageUrl: "/history/old.jpg",
     qualityPassed: true,
@@ -86,6 +88,7 @@ test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /cornerJunctionScore: check\.tiledCorner\?\.score \|\| 0/, "certification should retain four-corner junction score");
   assert.match(appSource, /seamDetailLossScore: Math\.max\(check\.detailHorizontal\?\.score \|\| 0, check\.detailVertical\?\.score \|\| 0\)/, "certification should retain seam detail-loss score");
   assert.match(appSource, /richnessScore: typeof check\.richness\?\.richnessScore === "number" \? check\.richness\.richnessScore : null/, "certification should retain print richness score");
+  assert.match(appSource, /layoutBalanceScore: typeof check\.layoutBalance\?\.balanceScore === "number" \? check\.layoutBalance\.balanceScore : null/, "certification should retain layout balance score");
   assert.match(appSource, /driftScore: Math\.max\(check\.driftHorizontal\?\.score \|\| 0, check\.driftVertical\?\.score \|\| 0\)/, "certification should retain edge-drift score");
   assert.match(serverSource, /certification: payload\.certification \|\| null/, "server should persist certification metadata");
 });
