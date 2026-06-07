@@ -73,6 +73,21 @@ test("hard visual failures are not reclassified as repairable internal lines", (
   assert.equal(check.finalIssueType, "花型元素叠加，不可修复");
 });
 
+test("localized motif overlap can route to AI repair without weakening severe overlap rejection", () => {
+  const { shouldOfferTaskRepair, shouldEdgeBlendRepair, shouldAiOffsetRepair } = loadRepairAvailabilityHelpers();
+  const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
+  const check = makeLocalizedOverlapCheck();
+
+  normalizeRepairableSeamIssue(check);
+
+  assert.equal(check.repairability, "repairable");
+  assert.equal(check.finalIssueType, "局部花型叠加，可修复");
+  assert.deepEqual(check.issues, ["局部花型叠加，可修复", "内部接缝线明显，可修复", "四角平铺交汇明显，可修复"]);
+  assert.equal(shouldAiOffsetRepair(check), true, "bounded local overlap should be eligible for AI redraw");
+  assert.equal(shouldEdgeBlendRepair(check), false, "bounded local overlap should not use simple edge blending");
+  assert.equal(shouldOfferTaskRepair({ aiRepairAttempts: 0 }, check), true, "manual repair should stay available for local overlap");
+});
+
 test("AI offset repair mask opens common internal guide-line bands", () => {
   const { internalGuideLineEditStrength } = loadMaskHelpers();
   const maskSource = extractFunction(appSource, "drawOffsetRepairMask");
@@ -89,11 +104,13 @@ test("AI offset repair mask opens common internal guide-line bands", () => {
 
 test("AI offset repair prompt names internal guide-line redraws", () => {
   const buildOffsetRepairPrompt = compileFunction(appSource, "buildOffsetRepairPrompt");
-  const prompt = buildOffsetRepairPrompt({ issues: ["内部接缝线明显，可修复"] });
+  const prompt = buildOffsetRepairPrompt({ issues: ["内部接缝线明显，可修复", "局部花型叠加，可修复"] });
 
   assert.ok(prompt.includes("1/4、1/3、2/3、3/4"));
   assert.match(prompt, /内部导线带/);
   assert.match(prompt, /网格线/);
+  assert.match(prompt, /局部花型叠加/);
+  assert.match(prompt, /贴片遮盖/);
 });
 
 function loadRepairAvailabilityHelpers() {
@@ -169,6 +186,38 @@ function makeClosedEdgeInternalLineCheck() {
     tiledCorner: { score: 9, worstScore: 16, junctionRisk: false },
     driftHorizontal: { driftRisk: false },
     driftVertical: { driftRisk: false },
+  };
+}
+
+function makeLocalizedOverlapCheck() {
+  return {
+    passed: false,
+    score: 18,
+    horizontalScore: 14,
+    verticalScore: 13,
+    cornerScore: 11,
+    peakRatioH: 0.18,
+    peakRatioV: 0.17,
+    issues: ["花型元素叠加，不可修复", "横档未衔接，不可修复"],
+    finalIssueType: "花型元素叠加，不可修复",
+    repairability: "unrepairable",
+    borderHorizontal: { worstMismatch: 88, objectRisk: false },
+    borderVertical: { worstMismatch: 92, objectRisk: false },
+    localHorizontal: { score: 14, worstScore: 28 },
+    localVertical: { score: 12, worstScore: 26 },
+    internalHorizontal: { score: 16, worstScore: 34, lineRisk: true },
+    internalVertical: { score: 14, worstScore: 32, lineRisk: true },
+    tiledCorner: { score: 8.6, worstScore: 15.2, junctionRisk: false },
+    driftHorizontal: { worstScore: 6, driftRisk: false },
+    driftVertical: { worstScore: 5, driftRisk: false },
+    bandHorizontal: { worstScore: 20 },
+    bandVertical: { worstScore: 18 },
+    detailHorizontal: { worstScore: 18 },
+    detailVertical: { worstScore: 16 },
+    tiledHorizontal: { worstScore: 22 },
+    tiledVertical: { worstScore: 20 },
+    mirrorHorizontal: { worstScore: 8, mirrorRisk: false },
+    mirrorVertical: { worstScore: 7, mirrorRisk: false },
   };
 }
 

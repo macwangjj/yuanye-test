@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.50-test";
+const clientVersion = "0.7.51-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -697,7 +697,7 @@ function buildAttemptStrategyGuidance(attempt = 1, previousCheck = null) {
 
   const issueText = collectQualityIssueText(previousCheck);
   const structuralSeam = isStructuralSeamIssue(issueText);
-  const overlapRisk = issueText.includes("花型元素叠加");
+  const overlapRisk = /花型元素叠加|局部花型叠加/.test(issueText);
   const layoutRisk = /花型分布过于集中|花型信息量不足|画框留白|输出比例拉伸/.test(issueText);
   const clarityRisk = /低清放大|成品清晰度不足|印花细节密度不足|压缩块噪点|锐化光晕|色阶断层/.test(issueText);
 
@@ -780,8 +780,8 @@ function retryGuidanceForIssue(issue) {
   if (text.includes("边缘错位漂移")) {
     return "坐标对齐：跨边缘的枝条、藤蔓和纹理必须在对侧同一坐标继续，不允许半格偏移、斜向漂移或错位复制。";
   }
-  if (text.includes("花型元素叠加")) {
-    return "避免贴片重叠：不要把元素堆叠在接缝处遮盖问题，重画自然穿插关系，保证花叶和纹理不互相压糊。";
+  if (text.includes("花型元素叠加") || text.includes("局部花型叠加")) {
+    return "避免贴片重叠：不要把元素堆叠在接缝处遮盖问题；局部叠加区域要重画自然穿插、留白和枝叶走向，保证花叶和纹理不互相压糊。";
   }
   if (text.includes("内部接缝线") || text.includes("接缝过渡不自然") || text.includes("平铺预览中心线") || text.includes("平铺边带") || text.includes("接缝细节发虚") || text.includes("细线接缝") || text.includes("轻微色差")) {
     return "丝滑过渡：接缝或内部导线区域必须重新生成自然图案细节，不要用模糊、淡化、平均色、纯色带、镜像带、网格线或羽化条带遮盖。";
@@ -1759,6 +1759,7 @@ function shouldRefineAiSeamRepair(next, previous) {
 
 function taskRepairableVisualIssue(check) {
   return Boolean(check?.issues?.some((issue) => (
+    issue.includes("局部花型叠加") ||
     issue.includes("内部接缝线") ||
     issue.includes("平铺边带") ||
     issue.includes("平铺预览") ||
@@ -1798,14 +1799,14 @@ function buildOffsetRepairPrompt(previousCheck = null) {
   const issueText = previousCheck?.issues?.length ? previousCheck.issues.join("、") : "中心十字接缝风险";
   return `这张图是一个四方连续印花单元经过 Offset 偏移后的中间修缝图：原本的上下/左右边缘接缝已经被移动到画面中心，形成可能可见的水平和垂直十字接缝。
 
-请重点重绘画面中心十字接缝附近的过渡区域；如果蒙版还开放了 1/4、1/3、2/3、3/4 附近的细长内部导线带，也要一并自然重绘，让 AI 生成丝滑衔接，而不是硬拼、镜像、糊边、网格线或简单平均颜色。上一轮检测问题：${issueText}。
+请重点重绘画面中心十字接缝附近的过渡区域；如果蒙版还开放了 1/4、1/3、2/3、3/4 附近的细长内部导线带，也要一并自然重绘。若上一轮有局部花型叠加，请把堆叠处改成自然穿插、合理留白和连续枝叶纹理，让 AI 生成丝滑衔接，而不是硬拼、镜像、糊边、网格线、贴片遮盖或简单平均颜色。上一轮检测问题：${issueText}。
 
 必须严格执行：
 1. 已提供蒙版：透明和半透明区域是允许重绘的中心十字接缝带，蒙版外侧应尽量保持原图稳定。
 2. 允许在中心水平线、中心垂直线以及蒙版开放的内部导线带附近做自然变化、补画、重绘和过渡生成；小幅元素变化可以接受，目标是无缝和自然。
 3. 保持外侧四边 10% 区域尽量稳定，因为这些外侧边界已经是连续边界，不能新增白边、黑边、画框或边缘拼接线。
 4. 中心十字修复后，纹理、笔触、花枝、叶片、抽象纹路、明暗层次必须自然穿过中心线；要像原本就连续绘制，而不是后期拼接。
-5. 如果中心线附近有元素断头，可以补出合理的枝叶、花瓣、纹理走向或背景过渡；如果有明暗突变，可以生成自然渐变和局部纹理变化。
+5. 如果中心线附近有元素断头或局部花型叠加，可以补出合理的枝叶、花瓣、纹理走向、留白关系或背景过渡；如果有明暗突变，可以生成自然渐变和局部纹理变化。
 6. 不要输出 2×2、3×3 或多块平铺预览，只输出单张完整图。
 7. 保持原图风格、配色、密度、元素气质和面料高级感，不要新增明显无关题材，不要把整张图改成另一种风格。
 8. 接缝处不能形成一条更亮、更暗、更糊、更平的边带；必须补出与周围一致的织物纹理、线条噪声、花枝走向和笔触颗粒。
@@ -1857,7 +1858,7 @@ function shouldEdgeBlendRepair(check) {
   if (!check || check.passed) return false;
   if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出") || issue.includes("画框留白"))) return false;
   if (check.issues?.some((issue) => issue.includes("镜像轴痕"))) return false;
-  if (check.issues?.some((issue) => issue.includes("花型元素叠加") || issue.includes("回头没接"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型元素叠加") || issue.includes("局部花型叠加") || issue.includes("回头没接"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
@@ -2777,10 +2778,6 @@ function measureSeamQuality(ctx, width, height) {
 function normalizeRepairableSeamIssue(check) {
   if (!check || check.passed || !Array.isArray(check.issues) || !check.issues.length) return check;
   const issueText = check.issues.join(" ");
-  if (/花型信息量不足|花型分布过于集中|疑似平铺预览输出|画框留白|输出比例拉伸|成品规格|低清放大|成品清晰度不足|印花细节密度不足|色阶断层|压缩块噪点|锐化光晕|花型元素叠加|最终JPG边缘硬线/.test(issueText)) {
-    return check;
-  }
-
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const peakRatio = Math.max(check.peakRatioH || 0, check.peakRatioV || 0);
   const localScore = Math.max(check.localHorizontal?.score || 0, check.localVertical?.score || 0);
@@ -2792,6 +2789,27 @@ function normalizeRepairableSeamIssue(check) {
   const cornerScore = Math.max(check.cornerScore || 0, check.tiledCorner?.score || 0);
   const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
   const cornerOnlyRisk = cornerScore > 7.2 || cornerWorst > 14 || check.tiledCorner?.junctionRisk;
+  const localizedOverlayRisk = issueText.includes("花型元素叠加") && (
+    edgeDominant <= 28 &&
+    peakRatio <= 0.24 &&
+    localScore <= 22 &&
+    localWorst <= 42 &&
+    internalScore <= 24 &&
+    internalWorst <= 54 &&
+    borderWorst <= 220 &&
+    !check.borderHorizontal?.objectRisk &&
+    !check.borderVertical?.objectRisk &&
+    !check.driftHorizontal?.driftRisk &&
+    !check.driftVertical?.driftRisk
+  );
+
+  if (/花型信息量不足|花型分布过于集中|疑似平铺预览输出|画框留白|输出比例拉伸|成品规格|低清放大|成品清晰度不足|印花细节密度不足|色阶断层|压缩块噪点|锐化光晕|最终JPG边缘硬线/.test(issueText)) {
+    return check;
+  }
+  if (issueText.includes("花型元素叠加") && !localizedOverlayRisk) {
+    return check;
+  }
+
   const edgeClosureStable = (
     edgeDominant <= 9.2 &&
     peakRatio <= 0.14 &&
@@ -2804,9 +2822,10 @@ function normalizeRepairableSeamIssue(check) {
     !check.driftVertical?.driftRisk
   );
 
-  if (!edgeClosureStable || (!internalLineRisk && !cornerOnlyRisk)) return check;
+  if (!localizedOverlayRisk && (!edgeClosureStable || (!internalLineRisk && !cornerOnlyRisk))) return check;
 
   const repairableIssues = [];
+  if (localizedOverlayRisk) repairableIssues.push("局部花型叠加，可修复");
   if (internalLineRisk) repairableIssues.push("内部接缝线明显，可修复");
   if (cornerOnlyRisk) repairableIssues.push("四角平铺交汇明显，可修复");
   if (!repairableIssues.length) repairableIssues.push("接缝过渡不自然，可修复");

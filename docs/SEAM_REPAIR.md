@@ -312,6 +312,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Hard failures such as motif overlap, low information, frames, wrong output form, low-resolution artifacts, compression blocks, and final-edge hard lines are not reclassified.
 - The commercial download gate is unchanged: these candidates still need to pass the full seam, print, metadata, and certification checks before download.
 
+## 0.7.51 Local Motif-Overlap AI Repair
+
+- Motif overlap is now split into localized and severe cases.
+- Localized seam-area motif overlap can route to AI Offset repair when edge scores, local windows, internal lines, drift, and border-object risk are still bounded.
+- Severe motif overlap, low information, center-heavy layout, frames, wrong output form, low-resolution artifacts, compression, posterization, sharpen halos, and final-edge hard lines still require regeneration.
+- The local overlap path is never sent to simple edge blending; it routes through AI redraw so stacked flowers, leaves, or texture patches can be rebuilt into natural spacing and continuous motif flow.
+- Tests cover localized-overlap reclassification, severe-overlap rejection, AI repair routing, and the unchanged commercial download gate.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
