@@ -251,6 +251,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `fullSizeEdgeScore` and `fullSizeEdgePeakRatio`; history downloads require the current final-size edge gate.
 - Tests cover a clean periodic final edge, mismatched one-pixel edge colors, and a matching one-pixel hard border that would draw a line in tiled output.
 
+## 0.7.43 Issue-Specific Regeneration Guidance
+
+- Automatic regeneration now translates quality failures into targeted prompt constraints instead of only echoing the previous issue list.
+- Seam failures, final JPG hard edges, pre-tiled preview output, outer frames, aspect distortion, low information density, center-heavy layouts, mirror-axis artifacts, low-resolution upscales, posterization, compression blocks, sharpen halos, edge drift, pasted overlaps, and blurred seam bands each get a different correction.
+- The retry prompt now explicitly says to regenerate one true repeat tile and internally preview a 3x3 tiling before output, so the next attempt is less likely to repeat the same visible seam.
+- Tests cover hard-edge retry guidance, pre-tiled preview correction, high-detail regeneration constraints, deduplication, instruction capping, and both normal/fission prompt wiring.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

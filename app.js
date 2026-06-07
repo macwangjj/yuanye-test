@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.42-test";
+const clientVersion = "0.7.43-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -648,11 +648,95 @@ function createHistoryMarker(actionType, total = 1) {
   };
 }
 
+function buildRetryGuidance(previousCheck = null) {
+  const issues = [
+    previousCheck?.finalIssueType,
+    ...(Array.isArray(previousCheck?.issues) ? previousCheck.issues : []),
+  ]
+    .map((issue) => String(issue || "").trim())
+    .filter(Boolean);
+  const uniqueIssues = [...new Set(issues)];
+  if (!uniqueIssues.length) return "";
+
+  const guidance = [];
+  for (const issue of uniqueIssues) {
+    const line = retryGuidanceForIssue(issue);
+    if (line && !guidance.includes(line)) guidance.push(line);
+  }
+  if (!guidance.length) {
+    guidance.push("总体重生：重新设计一个真实四方连续的单个循环单元，不要把上一张图裁切、镜像、模糊或简单拼贴。");
+  }
+
+  const cappedGuidance = guidance.slice(0, 6);
+  const issueSummary = uniqueIssues.slice(0, 6).join("、") + (uniqueIssues.length > 6 ? "等" : "");
+  return [
+    `上一次自动质检未通过：${issueSummary}。这次不是轻修边缘，而是重新设计一个真正四方连续的单个循环单元。`,
+    "本轮必须按失败原因纠偏：",
+    ...cappedGuidance.map((line) => `- ${line}`),
+    "生成前请在内部预演 3×3 平铺；若能看到任何水平/垂直线、四角硬点、模糊修补带、镜像轴或白边，就重新构图后再输出。",
+  ].join("\n");
+}
+
+function retryGuidanceForIssue(issue) {
+  const text = String(issue || "");
+  if (text.includes("横档")) {
+    return "上下边优先：上边缘和下边缘必须是同一条连续纹理的两端，花枝、线稿、织物颗粒和明暗在 Y 方向准确闭合，不能出现横向直线接缝。";
+  }
+  if (text.includes("竖档")) {
+    return "左右边优先：左边缘和右边缘必须是同一条连续纹理的两端，枝叶方向、图案坐标和明暗在 X 方向准确闭合，不能出现竖向直线接缝。";
+  }
+  if (text.includes("回头没接") || text.includes("四角平铺交汇")) {
+    return "四角闭合：四个角必须像同一块自然纹理的连续区域，不要在 2×2 交汇点形成硬点、圆斑、十字结、重复小花或修补块。";
+  }
+  if (text.includes("最终JPG边缘硬线")) {
+    return "最外缘重画：禁止 1px 边框、描边、暗线、亮线或编码压边；最外一圈像素也必须延续画面内部的自然线稿和织物颗粒。";
+  }
+  if (text.includes("平铺预览输出")) {
+    return "输出形态纠偏：只输出一个完整的单个循环单元，不要输出 2×2、3×3、拼贴预览、网格预览或带分割线的展示图。";
+  }
+  if (text.includes("画框留白")) {
+    return "满版铺底：图案必须铺满整张画布到四边，禁止白边、黑边、相纸边、画框、留白外沿或暗角边界。";
+  }
+  if (text.includes("输出比例拉伸") || text.includes("成品规格")) {
+    return "原生竖版：按竖版循环单元直接构图，接近 42cm×64cm 比例，不要把方图硬拉成长图，也不要输出横版或方形预览。";
+  }
+  if (text.includes("花型信息量不足")) {
+    return "信息量补足：增加可打印的花叶、藤蔓、纹理和细线层次，让边缘与内部都有足够图案密度，避免大面积空白或单调底纹。";
+  }
+  if (text.includes("花型分布过于集中")) {
+    return "布局均衡：把视觉重量分散到全画面，边缘和四角也要有自然延展的辅助元素，禁止单一大主体居中压住画面。";
+  }
+  if (text.includes("镜像轴痕")) {
+    return "去机械镜像：不要用左右/上下镜像复制来做无缝，中心和边缘都要有手绘式自然差异，避免明显对称轴。";
+  }
+  if (text.includes("低清放大") || text.includes("成品清晰度不足") || text.includes("印花细节密度不足")) {
+    return "原生高清：重新生成高分辨率细节，线稿、织物颗粒和微小纹理要清楚，禁止低分辨率放大、像素块、软糊水洗感或细节被抹平。";
+  }
+  if (text.includes("色阶断层")) {
+    return "色阶平滑：保持自然渐变和织物层次，不要出现海报化硬色带、阴影断层或大块突兀色阶。";
+  }
+  if (text.includes("压缩块噪点")) {
+    return "干净纹理：不要生成 JPEG 方块、马赛克块、脏噪点或规律压缩格，细节应来自图案线稿和织物颗粒。";
+  }
+  if (text.includes("锐化光晕")) {
+    return "自然锐度：不要过度锐化，线条边缘不能有白色/黑色光晕、描边毛刺或硬反差轮廓。";
+  }
+  if (text.includes("边缘错位漂移")) {
+    return "坐标对齐：跨边缘的枝条、藤蔓和纹理必须在对侧同一坐标继续，不允许半格偏移、斜向漂移或错位复制。";
+  }
+  if (text.includes("花型元素叠加")) {
+    return "避免贴片重叠：不要把元素堆叠在接缝处遮盖问题，重画自然穿插关系，保证花叶和纹理不互相压糊。";
+  }
+  if (text.includes("接缝过渡不自然") || text.includes("平铺预览中心线") || text.includes("平铺边带") || text.includes("接缝细节发虚") || text.includes("细线接缝") || text.includes("轻微色差")) {
+    return "丝滑过渡：接缝区域必须重新生成自然图案细节，不要用模糊、淡化、平均色、纯色带、镜像带或羽化条带遮盖。";
+  }
+  return "总体重生：重新设计一个真实四方连续的单个循环单元，不要把上一张图裁切、镜像、模糊或简单拼贴。";
+}
+
 function buildPrompt(previousCheck = null) {
   const styleNote = els.styleNotes.value.trim() || "严格读取参考图的艺术风格、配色、笔触、元素气质、疏密节奏与高级面料感，不新增与参考图调性冲突的元素。";
-  const retryNote = previousCheck?.issues?.length
-    ? `\n\n上一次自动质检未通过，问题是：${previousCheck.issues.join("、")}。本次必须重点修复这些问题：${seamFailureMessage(previousCheck)}，不要重复出现同类接缝。`
-    : "";
+  const retryGuidance = buildRetryGuidance(previousCheck);
+  const retryNote = retryGuidance ? `\n\n${retryGuidance}` : "";
   return `请基于上传的参考图进行延展设计，生成可用于服装面料数码印花的大尺寸四方连续无缝循环图案。
 
 必须严格执行：
@@ -691,9 +775,8 @@ function buildFissionPrompt(task, previousCheck = null) {
   const styleNote = els.styleNotes.value.trim() || "保持原图的艺术风格、配色、笔触、元素气质、疏密节奏与高级面料感。";
   const strength = fissionStrengthProfile();
   const parentNote = task?.parentPatternCode ? `\n- 原图编号：${task.parentPatternCode}。新图要像同一系列的延展款，但不能只是复制、裁切、镜像或轻微调色。` : "";
-  const retryNote = previousCheck?.issues?.length
-    ? `\n\n上一次自动质检未通过，问题是：${previousCheck.issues.join("、")}。本次必须重点修复这些问题：${seamFailureMessage(previousCheck)}，不要重复出现同类接缝。`
-    : "";
+  const retryGuidance = buildRetryGuidance(previousCheck);
+  const retryNote = retryGuidance ? `\n\n${retryGuidance}` : "";
   return `请把上传图片作为已经成品化的无缝印花参考图，先反推它的核心提示词：风格、配色、笔触、材质质感、构图密度、面料气质和连续纹样规则；再基于这些核心提示词重新设计一张同系列但元素明显变化的新图案。
 
 裂变要求：
