@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.41-test";
+const clientVersion = "0.7.42-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -517,6 +517,7 @@ function recordHasCertifiedDownload(record) {
     typeof gate.posterizationScore === "number" &&
     typeof gate.compressionArtifactScore === "number" &&
     typeof gate.sharpenHaloScore === "number" &&
+    typeof gate.fullSizeEdgeScore === "number" &&
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
@@ -608,6 +609,8 @@ function buildPrintCertification(task, actionType = "generate") {
       compressionArtifactPeriod: typeof check.compressionArtifact?.period === "number" ? check.compressionArtifact.period : null,
       sharpenHaloScore: typeof check.sharpenHalo?.haloScore === "number" ? check.sharpenHalo.haloScore : null,
       sharpenHaloRatio: typeof check.sharpenHalo?.haloRatio === "number" ? check.sharpenHalo.haloRatio : null,
+      fullSizeEdgeScore: typeof check.fullSizeEdge?.score === "number" ? check.fullSizeEdge.score : null,
+      fullSizeEdgePeakRatio: typeof check.fullSizeEdge?.peakRatio === "number" ? check.fullSizeEdge.peakRatio : null,
       richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
       activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
       layoutBalanceScore: typeof check.layoutBalance?.balanceScore === "number" ? check.layoutBalance.balanceScore : null,
@@ -1660,6 +1663,7 @@ function checkSeamQuality(dataUrl) {
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         const check = measureSeamQuality(ctx, canvas.width, canvas.height);
+        applyFullSizeEdgeCheck(check, measureFullSizeEdgeArtifact(image));
         applyPrintSpecCheck(check, measurePrintSpec(dataUrl, image.width, image.height));
         resolve(check);
       } catch (error) {
@@ -1682,6 +1686,7 @@ function seamCheckSummary(check) {
     `平铺 ${Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0).toFixed(2)}`,
     `交汇 ${Number(check.tiledCorner?.score || 0).toFixed(2)}`,
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
+    `原边 ${Number(check.fullSizeEdge?.score || 0).toFixed(2)}`,
     `边框 ${Number(check.outerFrame?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     `放大 ${Number(check.upscaleArtifact?.artifactScore || 0).toFixed(2)}`,
@@ -1709,6 +1714,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("竖档未衔接，不可修复")) return "竖档未衔接，不可修复";
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
   if (check.issues?.includes("输出比例拉伸过大，不可修复")) return "输出比例拉伸过大，不可修复";
+  if (check.issues?.includes("最终JPG边缘硬线，不可修复")) return "最终JPG边缘硬线，不可修复";
   if (check.issues?.includes("花型信息量不足，不可修复")) return "花型信息量不足，不可修复";
   if (check.issues?.includes("花型分布过于集中，不可修复")) return "花型分布过于集中，不可修复";
   if (check.issues?.includes("疑似平铺预览输出，不可修复")) return "疑似平铺预览输出，不可修复";
@@ -2380,6 +2386,145 @@ function measureSeamQuality(ctx, width, height) {
   };
   check.rating = seamRating(check);
   return check;
+}
+
+function measureFullSizeEdgeArtifact(image) {
+  const width = image.naturalWidth || image.width || 0;
+  const height = image.naturalHeight || image.height || 0;
+  if (width < 8 || height < 8) {
+    return {
+      score: Infinity,
+      peakRatio: 1,
+      horizontal: { score: Infinity, edgeRisk: true },
+      vertical: { score: Infinity, edgeRisk: true },
+      edgeRisk: true,
+    };
+  }
+
+  const size = Math.min(width, height);
+  const depth = Math.max(4, Math.min(18, Math.round(size * 0.002)));
+  const horizontal = measureFullSizeEdgeAxis(image, depth, "horizontal");
+  const vertical = measureFullSizeEdgeAxis(image, depth, "vertical");
+  const score = Math.max(horizontal.score, vertical.score);
+  const peakRatio = Math.max(horizontal.peakRatio, vertical.peakRatio);
+
+  return {
+    score,
+    peakRatio,
+    horizontal,
+    vertical,
+    edgeRisk: horizontal.edgeRisk || vertical.edgeRisk,
+  };
+}
+
+function measureFullSizeEdgeAxis(image, depth, direction) {
+  const horizontal = direction === "horizontal";
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const sourceLength = horizontal ? sourceWidth : sourceHeight;
+  const sampleLength = Math.max(80, Math.min(1200, sourceLength));
+  const canvas = document.createElement("canvas");
+  canvas.width = horizontal ? sampleLength : depth * 2;
+  canvas.height = horizontal ? depth * 2 : sampleLength;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  if (horizontal) {
+    ctx.drawImage(image, 0, 0, sourceWidth, depth, 0, 0, sampleLength, depth);
+    ctx.drawImage(image, 0, sourceHeight - depth, sourceWidth, depth, 0, depth, sampleLength, depth);
+  } else {
+    ctx.drawImage(image, 0, 0, depth, sourceHeight, 0, 0, depth, sampleLength);
+    ctx.drawImage(image, sourceWidth - depth, 0, depth, sourceHeight, depth, 0, depth, sampleLength);
+  }
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  return measureFullSizeEdgeStrip(imageData, canvas.width, canvas.height, horizontal ? "horizontal" : "vertical", depth, sampleLength);
+}
+
+function measureFullSizeEdgeStrip(data, width, height, direction, depth, length) {
+  const horizontal = direction === "horizontal";
+  let seamTotal = 0;
+  let seamWorst = 0;
+  let seamPeaks = 0;
+  let lineTotal = 0;
+  let lineWorst = 0;
+  let linePeaks = 0;
+  let count = 0;
+
+  for (let position = 0; position < length; position += 1) {
+    const topOuter = fullSizeStripPoint(position, 0, depth, horizontal);
+    const bottomOuter = fullSizeStripPoint(position, depth - 1, depth, horizontal, true);
+    const topInner = fullSizeStripPoint(position, 1, depth, horizontal);
+    const bottomInner = fullSizeStripPoint(position, depth - 2, depth, horizontal, true);
+    const topInner2 = fullSizeStripPoint(position, 2, depth, horizontal);
+    const bottomInner2 = fullSizeStripPoint(position, depth - 3, depth, horizontal, true);
+    const seam = stripPixelDistance(data, width, topOuter.x, topOuter.y, bottomOuter.x, bottomOuter.y);
+    const topJump = stripPixelDistance(data, width, topOuter.x, topOuter.y, topInner.x, topInner.y);
+    const bottomJump = stripPixelDistance(data, width, bottomOuter.x, bottomOuter.y, bottomInner.x, bottomInner.y);
+    const innerActivity = (
+      stripPixelDistance(data, width, topInner.x, topInner.y, topInner2.x, topInner2.y) +
+      stripPixelDistance(data, width, bottomInner.x, bottomInner.y, bottomInner2.x, bottomInner2.y)
+    ) / 2;
+    const edgeJump = (topJump + bottomJump) / 2;
+    const lineScore = Math.max(0, edgeJump - innerActivity * 1.8 - 7);
+
+    seamTotal += seam;
+    seamWorst = Math.max(seamWorst, seam);
+    lineTotal += lineScore;
+    lineWorst = Math.max(lineWorst, lineScore);
+    if (seam > Math.max(18, innerActivity * 2 + 6)) seamPeaks += 1;
+    if (lineScore > 8 && edgeJump > 22) linePeaks += 1;
+    count += 1;
+  }
+
+  const seamAverage = seamTotal / Math.max(1, count);
+  const seamPeakRatio = seamPeaks / Math.max(1, count);
+  const lineAverage = lineTotal / Math.max(1, count);
+  const linePeakRatio = linePeaks / Math.max(1, count);
+  const score = seamAverage * 0.55 + seamPeakRatio * 95 + lineAverage * 0.7 + linePeakRatio * 70;
+  const edgeRisk = (
+    (seamAverage > 9.5 && seamPeakRatio > 0.025) ||
+    (seamWorst > 48 && seamPeakRatio > 0.012) ||
+    (lineAverage > 7.5 && linePeakRatio > 0.08 && lineWorst > 18) ||
+    score > 22
+  );
+
+  return {
+    score,
+    peakRatio: Math.max(seamPeakRatio, linePeakRatio),
+    seamAverage,
+    seamWorst,
+    seamPeakRatio,
+    lineAverage,
+    lineWorst,
+    linePeakRatio,
+    edgeRisk,
+  };
+}
+
+function fullSizeStripPoint(position, offset, depth, horizontal, secondSide = false) {
+  const safeOffset = Math.max(0, Math.min(depth - 1, offset));
+  if (horizontal) {
+    return {
+      x: position,
+      y: secondSide ? depth + safeOffset : safeOffset,
+    };
+  }
+  return {
+    x: secondSide ? depth + safeOffset : safeOffset,
+    y: position,
+  };
+}
+
+function stripPixelDistance(data, width, x1, y1, x2, y2) {
+  const a = (Math.round(y1) * width + Math.round(x1)) * 4;
+  const b = (Math.round(y2) * width + Math.round(x2)) * 4;
+  return (
+    Math.abs(data[a] - data[b]) +
+    Math.abs(data[a + 1] - data[b + 1]) +
+    Math.abs(data[a + 2] - data[b + 2])
+  ) / 3;
 }
 
 function pixelDistance(data, width, x1, y1, x2, y2) {
@@ -4752,6 +4897,23 @@ function applyPrintSpecCheck(check, printSpec) {
   check.passed = false;
   check.repairability = "unrepairable";
   check.finalIssueType = "成品规格不正确，不可下载";
+  check.rating = seamRating(check);
+  return check;
+}
+
+function applyFullSizeEdgeCheck(check, fullSizeEdge) {
+  check.fullSizeEdge = fullSizeEdge;
+  if (!fullSizeEdge?.edgeRisk) {
+    check.rating = seamRating(check);
+    return check;
+  }
+
+  if (!check.issues.includes("最终JPG边缘硬线，不可修复")) {
+    check.issues.unshift("最终JPG边缘硬线，不可修复");
+  }
+  check.passed = false;
+  check.repairability = "unrepairable";
+  check.finalIssueType = "最终JPG边缘硬线，不可修复";
   check.rating = seamRating(check);
   return check;
 }

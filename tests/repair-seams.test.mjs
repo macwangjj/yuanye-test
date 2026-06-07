@@ -128,6 +128,24 @@ test("edge drift check rejects shifted seam texture", () => {
   assert.ok(drift.worstScore > 13, `expected a visible drift score; got ${drift.worstScore}`);
 });
 
+test("final-size edge check rejects one-pixel JPG edge seams", () => {
+  const width = 180;
+  const height = 220;
+  const clean = makePeriodicPattern(width, height);
+  const mismatched = makePeriodicPattern(width, height);
+  const hardLine = makePeriodicPattern(width, height);
+  paintFinalEdgePixels(mismatched, width, height, "horizontal", [246, 238, 224], [28, 24, 21]);
+  paintFinalEdgePixels(hardLine, width, height, "horizontal", [24, 21, 18], [24, 21, 18]);
+  const cleanCheck = measureFullSizeEdgeArtifactCore(clean, width, height);
+  const mismatchCheck = measureFullSizeEdgeArtifactCore(mismatched, width, height);
+  const hardLineCheck = measureFullSizeEdgeArtifactCore(hardLine, width, height);
+
+  assert.equal(cleanCheck.edgeRisk, false, `periodic final JPG edge should pass; got ${JSON.stringify(cleanCheck)}`);
+  assert.equal(mismatchCheck.edgeRisk, true, `mismatched final JPG edge pixels should fail; got ${JSON.stringify(mismatchCheck)}`);
+  assert.equal(hardLineCheck.edgeRisk, true, `matching one-pixel hard border should fail; got ${JSON.stringify(hardLineCheck)}`);
+  assert.ok(mismatchCheck.score > cleanCheck.score + 20, `mismatched final edge score should be much higher; clean=${cleanCheck.score} mismatch=${mismatchCheck.score}`);
+});
+
 test("tiled corner junction check allows aligned periodic corners", () => {
   const width = 144;
   const height = 144;
@@ -715,6 +733,25 @@ function paintShiftedMatchingEdge(data, width, height, direction, depth, shift) 
   }
 }
 
+function paintFinalEdgePixels(data, width, height, direction, firstColor, secondColor) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  for (let position = 0; position < length; position += 1) {
+    const firstX = horizontal ? position : 0;
+    const firstY = horizontal ? 0 : position;
+    const secondX = horizontal ? position : width - 1;
+    const secondY = horizontal ? height - 1 : position;
+    const first = (firstY * width + firstX) * 4;
+    const second = (secondY * width + secondX) * 4;
+    data[first] = firstColor[0];
+    data[first + 1] = firstColor[1];
+    data[first + 2] = firstColor[2];
+    data[second] = secondColor[0];
+    data[second + 1] = secondColor[1];
+    data[second + 2] = secondColor[2];
+  }
+}
+
 function paintMatchingCornerSpot(data, width, height, radius, color) {
   const corners = [
     [0, 0, 1, 1],
@@ -1148,6 +1185,93 @@ function measureEdgeDriftCore(data, width, height, direction) {
     dominantShift,
     confidence: bestConfidence,
     driftRisk: worstScore > 13.5 || score > 8.5 || (shiftedWindows >= 2 && shiftedRatio > 0.08 && averageShift >= 2.4 && worstScore > 9.5),
+  };
+}
+
+function measureFullSizeEdgeArtifactCore(data, width, height) {
+  const horizontal = measureFullSizeEdgeStripCore(data, width, height, "horizontal");
+  const vertical = measureFullSizeEdgeStripCore(data, width, height, "vertical");
+  return {
+    score: Math.max(horizontal.score, vertical.score),
+    peakRatio: Math.max(horizontal.peakRatio, vertical.peakRatio),
+    horizontal,
+    vertical,
+    edgeRisk: horizontal.edgeRisk || vertical.edgeRisk,
+  };
+}
+
+function measureFullSizeEdgeStripCore(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  let seamTotal = 0;
+  let seamWorst = 0;
+  let seamPeaks = 0;
+  let lineTotal = 0;
+  let lineWorst = 0;
+  let linePeaks = 0;
+  let count = 0;
+
+  for (let position = 0; position < length; position += 1) {
+    const topOuter = fullSizeEdgePointCore(position, 0, width, height, horizontal);
+    const bottomOuter = fullSizeEdgePointCore(position, 0, width, height, horizontal, true);
+    const topInner = fullSizeEdgePointCore(position, 1, width, height, horizontal);
+    const bottomInner = fullSizeEdgePointCore(position, 1, width, height, horizontal, true);
+    const topInner2 = fullSizeEdgePointCore(position, 2, width, height, horizontal);
+    const bottomInner2 = fullSizeEdgePointCore(position, 2, width, height, horizontal, true);
+    const seam = pixelDistance(data, width, topOuter.x, topOuter.y, bottomOuter.x, bottomOuter.y);
+    const topJump = pixelDistance(data, width, topOuter.x, topOuter.y, topInner.x, topInner.y);
+    const bottomJump = pixelDistance(data, width, bottomOuter.x, bottomOuter.y, bottomInner.x, bottomInner.y);
+    const innerActivity = (
+      pixelDistance(data, width, topInner.x, topInner.y, topInner2.x, topInner2.y) +
+      pixelDistance(data, width, bottomInner.x, bottomInner.y, bottomInner2.x, bottomInner2.y)
+    ) / 2;
+    const edgeJump = (topJump + bottomJump) / 2;
+    const lineScore = Math.max(0, edgeJump - innerActivity * 1.8 - 7);
+
+    seamTotal += seam;
+    seamWorst = Math.max(seamWorst, seam);
+    lineTotal += lineScore;
+    lineWorst = Math.max(lineWorst, lineScore);
+    if (seam > Math.max(18, innerActivity * 2 + 6)) seamPeaks += 1;
+    if (lineScore > 8 && edgeJump > 22) linePeaks += 1;
+    count += 1;
+  }
+
+  const seamAverage = seamTotal / Math.max(1, count);
+  const seamPeakRatio = seamPeaks / Math.max(1, count);
+  const lineAverage = lineTotal / Math.max(1, count);
+  const linePeakRatio = linePeaks / Math.max(1, count);
+  const score = seamAverage * 0.55 + seamPeakRatio * 95 + lineAverage * 0.7 + linePeakRatio * 70;
+  const edgeRisk = (
+    (seamAverage > 9.5 && seamPeakRatio > 0.025) ||
+    (seamWorst > 48 && seamPeakRatio > 0.012) ||
+    (lineAverage > 7.5 && linePeakRatio > 0.08 && lineWorst > 18) ||
+    score > 22
+  );
+
+  return {
+    score,
+    peakRatio: Math.max(seamPeakRatio, linePeakRatio),
+    seamAverage,
+    seamWorst,
+    seamPeakRatio,
+    lineAverage,
+    lineWorst,
+    linePeakRatio,
+    edgeRisk,
+  };
+}
+
+function fullSizeEdgePointCore(position, offset, width, height, horizontal, secondSide = false) {
+  if (horizontal) {
+    return {
+      x: position,
+      y: secondSide ? height - 1 - offset : offset,
+    };
+  }
+  return {
+    x: secondSide ? width - 1 - offset : offset,
+    y: position,
   };
 }
 

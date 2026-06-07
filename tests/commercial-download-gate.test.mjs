@@ -82,6 +82,7 @@ test("history and batch downloads only include certified records", () => {
   assert.match(recordCertificationFunction, /typeof gate\.posterizationScore === "number"/, "history certification must require the posterization gate");
   assert.match(recordCertificationFunction, /typeof gate\.compressionArtifactScore === "number"/, "history certification must require the compression artifact gate");
   assert.match(recordCertificationFunction, /typeof gate\.sharpenHaloScore === "number"/, "history certification must require the sharpen halo gate");
+  assert.match(recordCertificationFunction, /typeof gate\.fullSizeEdgeScore === "number"/, "history certification must require the final-size edge gate");
   assert.match(recordCertificationFunction, /typeof gate\.richnessScore === "number"/, "history certification must require the print richness gate");
   assert.match(recordCertificationFunction, /typeof gate\.layoutBalanceScore === "number"/, "history certification must require the layout balance gate");
   assert.match(recordCertificationFunction, /typeof gate\.mirrorAxisScore === "number"/, "history certification must require the mirror-axis gate");
@@ -112,6 +113,7 @@ test("history certification rejects stale or partial metadata", () => {
         posterizationScore: 8.7,
         compressionArtifactScore: 1.8,
         sharpenHaloScore: 0.6,
+        fullSizeEdgeScore: 1.1,
         richnessScore: 9.8,
         layoutBalanceScore: 1.3,
         mirrorAxisScore: 0.9,
@@ -147,7 +149,7 @@ test("history certification rejects stale or partial metadata", () => {
         qualityPassed: true,
       },
     },
-  }), false, "records missing the seam detail-loss, upscale-artifact, posterization, compression-artifact, sharpen-halo, richness, layout, mirror-axis, pre-tiled, texture-density, outer-frame, and aspect-warp gates should not be downloadable");
+  }), false, "records missing the seam detail-loss, upscale-artifact, posterization, compression-artifact, sharpen-halo, final-size edge, richness, layout, mirror-axis, pre-tiled, texture-density, outer-frame, and aspect-warp gates should not be downloadable");
   assert.equal(recordHasCertifiedDownload({
     ...certifiedRecord,
     certification: {
@@ -182,6 +184,7 @@ test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /posterizationScore: typeof check\.posterization\?\.posterizationScore === "number" \? check\.posterization\.posterizationScore : null/, "certification should retain posterization artifact score");
   assert.match(appSource, /compressionArtifactScore: typeof check\.compressionArtifact\?\.blockScore === "number" \? check\.compressionArtifact\.blockScore : null/, "certification should retain compression artifact score");
   assert.match(appSource, /sharpenHaloScore: typeof check\.sharpenHalo\?\.haloScore === "number" \? check\.sharpenHalo\.haloScore : null/, "certification should retain sharpen halo score");
+  assert.match(appSource, /fullSizeEdgeScore: typeof check\.fullSizeEdge\?\.score === "number" \? check\.fullSizeEdge\.score : null/, "certification should retain final-size edge score");
   assert.match(appSource, /richnessScore: typeof check\.richness\?\.richnessScore === "number" \? check\.richness\.richnessScore : null/, "certification should retain print richness score");
   assert.match(appSource, /layoutBalanceScore: typeof check\.layoutBalance\?\.balanceScore === "number" \? check\.layoutBalance\.balanceScore : null/, "certification should retain layout balance score");
   assert.match(appSource, /mirrorAxisScore: Math\.max\(check\.mirrorHorizontal\?\.score \|\| 0, check\.mirrorVertical\?\.score \|\| 0\)/, "certification should retain mirror-axis score");

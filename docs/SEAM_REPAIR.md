@@ -243,6 +243,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `sharpenHaloScore` and `sharpenHaloRatio`; history downloads require the current sharpen-halo gate.
 - Tests cover clean printable texture that must pass and synthetic bright-edge/dark-edge ringing that must fail.
 
+## 0.7.42 Final-Size Edge Gate
+
+- The seam checker now samples narrow strips from the original final JPG before it creates the smaller analysis canvas.
+- This catches one-pixel hard edge seams, final-encoder border lines, and matching but visible outer-edge strokes that can be blurred away by downscaled preview analysis.
+- The issue is reported as `最终JPG边缘硬线，不可修复`, because the exported handoff file itself contains the defect and must be regenerated or re-exported cleanly.
+- Certification metadata stores `fullSizeEdgeScore` and `fullSizeEdgePeakRatio`; history downloads require the current final-size edge gate.
+- Tests cover a clean periodic final edge, mismatched one-pixel edge colors, and a matching one-pixel hard border that would draw a line in tiled output.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
