@@ -196,6 +196,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - `auto` remains as a final fallback so generation can still proceed when the provider rejects explicit size parameters.
 - Tests cover the attempt order so requested portrait size cannot accidentally move behind `auto` again.
 
+## 0.7.36 Strict Export-Mode Certification
+
+- History downloads now require the saved certification to include `actual.exportMode`, `actual.tileColumns`, and `actual.tileRows`.
+- Only `direct-stretch` with a `1 x 1` grid or `periodic-grid` with more than one tile can pass the history certification gate.
+- This prevents records certified before the 0.7.34 periodic export logic from remaining downloadable without proof of the exact export geometry.
+- History rows disclose either `竖版直出` or `周期转竖版 2×3`, so visual review can connect each JPG to the export path that produced it.
+- Tests cover direct exports, periodic-grid exports, missing export metadata, and mismatched export-mode/grid combinations.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

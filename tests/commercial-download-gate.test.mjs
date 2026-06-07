@@ -33,6 +33,9 @@ test("history and batch downloads only include certified records", () => {
   assert.match(downloadGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history group download should filter to certified records");
   assert.match(recordCertificationFunction, /actual\.printSpecPassed === true/, "history certification must require saved print spec verification");
   assert.match(recordCertificationFunction, /actual\.aspectWarpPassed === true/, "history certification must require saved aspect-warp verification");
+  assert.match(recordCertificationFunction, /actual\.exportMode === "direct-stretch" \|\| actual\.exportMode === "periodic-grid"/, "history certification must require a saved export mode");
+  assert.match(recordCertificationFunction, /Number\.isInteger\(actual\.tileColumns\)/, "history certification must require saved export grid columns");
+  assert.match(recordCertificationFunction, /Number\.isInteger\(actual\.tileRows\)/, "history certification must require saved export grid rows");
   assert.match(recordCertificationFunction, /certification\.certified === true/, "history certification must require an explicit certified handoff flag");
   assert.match(recordCertificationFunction, /gate\.fourWayRepeat === true/, "history certification must require saved four-way-repeat approval");
   assert.match(recordCertificationFunction, /gate\.qualityPassed === true/, "history certification must require saved quality approval");
@@ -45,18 +48,20 @@ test("history and batch downloads only include certified records", () => {
   assert.match(recordCertificationFunction, /typeof gate\.outerFrameScore === "number"/, "history certification must require the outer-frame gate");
   assert.match(recordCertificationFunction, /typeof gate\.aspectWarpRatio === "number"/, "history certification must require the aspect-warp gate");
   assert.match(selectedZipFunction, /item\.certified === true/, "batch zip should only include explicitly certified entries");
+  assert.match(historyTemplateFunction, /historyExportModeText\(record\)/, "history records should disclose direct or periodic export mode");
   assert.match(historyTemplateFunction, /data-certified="\$\{certified\}"/, "history checkbox should carry certification state");
   assert.match(historyTemplateFunction, /disabled/, "uncertified history records should render a disabled download control");
 });
 
 test("history certification rejects stale or partial metadata", () => {
   const recordHasCertifiedDownload = compileFunction(appSource, "recordHasCertifiedDownload");
+  const historyExportModeText = compileFunction(appSource, "historyExportModeText");
   const certifiedRecord = {
     imageUrl: "/history/current.jpg",
     qualityPassed: true,
     certification: {
       certified: true,
-      actual: { printSpecPassed: true, aspectWarpPassed: true },
+      actual: { printSpecPassed: true, aspectWarpPassed: true, exportMode: "direct-stretch", tileColumns: 1, tileRows: 1 },
       gate: {
         fourWayRepeat: true,
         qualityPassed: true,
@@ -78,12 +83,39 @@ test("history certification rejects stale or partial metadata", () => {
     ...certifiedRecord,
     certification: {
       ...certifiedRecord.certification,
+      actual: { printSpecPassed: true, aspectWarpPassed: true, exportMode: "periodic-grid", tileColumns: 2, tileRows: 3 },
+    },
+  }), true, "periodic-grid rectified records with complete certification should be downloadable");
+  assert.equal(historyExportModeText(certifiedRecord), "竖版直出", "history should label direct portrait exports");
+  assert.equal(historyExportModeText({
+    certification: {
+      actual: { exportMode: "periodic-grid", tileColumns: 2, tileRows: 3 },
+    },
+  }), "周期转竖版 2×3", "history should label periodic-grid rectified exports");
+  assert.equal(recordHasCertifiedDownload({
+    ...certifiedRecord,
+    certification: {
+      ...certifiedRecord.certification,
       gate: {
         fourWayRepeat: true,
         qualityPassed: true,
       },
     },
   }), false, "records missing the seam detail-loss, richness, layout, mirror-axis, pre-tiled, texture-density, outer-frame, and aspect-warp gates should not be downloadable");
+  assert.equal(recordHasCertifiedDownload({
+    ...certifiedRecord,
+    certification: {
+      ...certifiedRecord.certification,
+      actual: { printSpecPassed: true, aspectWarpPassed: true },
+    },
+  }), false, "records missing export-mode metadata should not be downloadable");
+  assert.equal(recordHasCertifiedDownload({
+    ...certifiedRecord,
+    certification: {
+      ...certifiedRecord.certification,
+      actual: { printSpecPassed: true, aspectWarpPassed: true, exportMode: "direct-stretch", tileColumns: 2, tileRows: 3 },
+    },
+  }), false, "direct exports with periodic grid dimensions should not be downloadable");
   assert.equal(recordHasCertifiedDownload({
     imageUrl: "/history/old.jpg",
     qualityPassed: true,

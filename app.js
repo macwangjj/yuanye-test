@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.35-test";
+const clientVersion = "0.7.36-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -491,12 +491,21 @@ function recordHasCertifiedDownload(record) {
   const certification = record?.certification || {};
   const actual = certification.actual || {};
   const gate = certification.gate || {};
+  const validExportMode = actual.exportMode === "direct-stretch" || actual.exportMode === "periodic-grid";
+  const validTileGrid = Number.isInteger(actual.tileColumns) && actual.tileColumns >= 1 &&
+    Number.isInteger(actual.tileRows) && actual.tileRows >= 1;
+  const exportGridMatchesMode = actual.exportMode === "periodic-grid"
+    ? actual.tileColumns * actual.tileRows > 1
+    : actual.tileColumns === 1 && actual.tileRows === 1;
   return Boolean(
     record?.imageUrl &&
     record?.qualityPassed === true &&
     certification.certified === true &&
     actual.printSpecPassed === true &&
     actual.aspectWarpPassed === true &&
+    validExportMode &&
+    validTileGrid &&
+    exportGridMatchesMode &&
     gate.fourWayRepeat === true &&
     gate.qualityPassed === true &&
     typeof gate.seamDetailLossScore === "number" &&
@@ -508,6 +517,19 @@ function recordHasCertifiedDownload(record) {
     typeof gate.outerFrameScore === "number" &&
     typeof gate.aspectWarpRatio === "number"
   );
+}
+
+function historyExportModeText(record) {
+  const actual = record?.certification?.actual || {};
+  if (
+    actual.exportMode === "periodic-grid" &&
+    Number.isInteger(actual.tileColumns) &&
+    Number.isInteger(actual.tileRows)
+  ) {
+    return `周期转竖版 ${actual.tileColumns}×${actual.tileRows}`;
+  }
+  if (actual.exportMode === "direct-stretch") return "竖版直出";
+  return "";
 }
 
 function updateTaskDownloadGate(task) {
@@ -4620,6 +4642,7 @@ function historyRecordTemplate(record) {
   const certified = recordHasCertifiedDownload(record);
   const qualityText = record.qualityPassed === false ? "需人工复核" : record.qualityPassed === true ? "已通过" : "";
   const certificationText = certified ? "商用下载认证" : "未认证下载";
+  const exportModeText = historyExportModeText(record);
   const attemptsText = record.generationAttempts > 1 ? ` · 重生${record.generationAttempts - 1}次` : "";
   const repairText = record.locallyRepaired ? ` · 已轻修${record.repairAttempts || 1}次` : record.repairAttempts ? ` · 轻修${record.repairAttempts}次未通过` : "";
   const issueText = Array.isArray(record.issueTypes) && record.issueTypes.length ? ` · ${record.issueTypes.join("、")}` : "";
@@ -4632,7 +4655,7 @@ function historyRecordTemplate(record) {
         <strong>${escapeHtml(record.patternCode || record.sourceName)}</strong>
         <span>${escapeHtml(record.sourceName)}</span>
         <span>${formatFullTime(new Date(record.createdAt))}</span>
-        <span>${escapeHtml(record.rating || "未检查")}${typeof record.score === "number" ? ` · ${record.score.toFixed(2)}` : ""}${escapeHtml(repairText)}${escapeHtml(attemptsText)}${escapeHtml(issueText)}</span>
+        <span>${escapeHtml(record.rating || "未检查")}${typeof record.score === "number" ? ` · ${record.score.toFixed(2)}` : ""}${exportModeText ? ` · ${escapeHtml(exportModeText)}` : ""}${escapeHtml(repairText)}${escapeHtml(attemptsText)}${escapeHtml(issueText)}</span>
         ${qualityText ? `<span>${escapeHtml(qualityText)}</span>` : ""}
         <span class="${certified ? "certified-chip" : "uncertified-chip"}">${certificationText}</span>
         ${isDownloaded(record.downloadName) ? `<span class="downloaded-chip">已下载过</span>` : ""}
