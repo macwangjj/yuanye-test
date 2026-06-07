@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.53-test";
+const clientVersion = "0.7.54-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -2020,7 +2020,7 @@ function checkSeamScore(dataUrl) {
   return checkSeamQuality(dataUrl).then((check) => check.score);
 }
 
-function checkSeamQuality(dataUrl) {
+function checkSeamQuality(dataUrl, options = {}) {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => {
@@ -2034,7 +2034,13 @@ function checkSeamQuality(dataUrl) {
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         const check = measureSeamQuality(ctx, canvas.width, canvas.height);
         applyFullSizeEdgeCheck(check, measureFullSizeEdgeArtifact(image));
-        applyPrintSpecCheck(check, measurePrintSpec(dataUrl, image.width, image.height));
+        const printSpec = measurePrintSpec(dataUrl, image.width, image.height);
+        if (options.skipPrintSpec === true) {
+          check.printSpec = printSpec;
+          check.rating = seamRating(check);
+        } else {
+          applyPrintSpecCheck(check, printSpec);
+        }
         resolve(check);
       } catch (error) {
         reject(error);
@@ -2773,6 +2779,79 @@ function measureSeamQuality(ctx, width, height) {
   normalizeRepairableSeamIssue(check);
   check.rating = seamRating(check);
   return check;
+}
+
+function installQaTools() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("qa") !== "1") return;
+
+  document.documentElement.dataset.yuanyeQa = "1";
+  window.YUANYE_QA = Object.freeze({
+    version: clientVersion,
+    checkSeamQuality,
+    checkSeamStructureQuality: (dataUrl) => checkSeamQuality(dataUrl, { skipPrintSpec: true }),
+    imageUrlToDataUrl,
+    seamCheckSummary,
+    seamFailureMessage,
+    shouldAiOffsetRepair,
+    shouldOfferTaskRepair,
+    normalizeRepairableSeamIssue,
+    buildOffsetRepairPrompt,
+    makeOffsetRepairMaskDataUrl,
+  });
+
+  const output = document.createElement("pre");
+  output.id = "qaOutput";
+  output.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;z-index:9999;max-height:42vh;overflow:auto;padding:12px;border:1px solid #94a3b8;background:#0f172a;color:#e2e8f0;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;";
+  output.textContent = JSON.stringify({ status: "ready", version: clientVersion }, null, 2);
+  document.body.appendChild(output);
+
+  const checkUrl = params.get("qaCheck");
+  if (checkUrl) {
+    runQaCheck(checkUrl, params.get("qaMode") || "full", output);
+  }
+}
+
+async function runQaCheck(url, mode, output) {
+  output.textContent = JSON.stringify({ status: "running", mode, url }, null, 2);
+  try {
+    const check = await checkSeamQuality(url, { skipPrintSpec: mode === "structure" });
+    output.textContent = JSON.stringify(compactQaCheck(check, { mode, url }), null, 2);
+  } catch (error) {
+    output.textContent = JSON.stringify({
+      status: "error",
+      mode,
+      url,
+      error: error.message || String(error),
+    }, null, 2);
+  }
+}
+
+function compactQaCheck(check, context = {}) {
+  return {
+    status: "done",
+    mode: context.mode || "full",
+    url: context.url || "",
+    passed: check.passed,
+    repairability: check.repairability,
+    rating: check.rating,
+    finalIssueType: check.finalIssueType || "",
+    score: Number(check.score || 0),
+    horizontalScore: Number(check.horizontalScore || 0),
+    verticalScore: Number(check.verticalScore || 0),
+    cornerScore: Number(check.cornerScore || 0),
+    tiledScore: Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0),
+    tiledCornerScore: check.tiledCorner?.score || 0,
+    driftScore: Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0),
+    fullSizeEdgeScore: check.fullSizeEdge?.score || 0,
+    printSpecPassed: check.printSpec?.passed === true,
+    printWidth: check.printSpec?.widthPx || null,
+    printHeight: check.printSpec?.heightPx || null,
+    dpiX: check.printSpec?.dpiX || null,
+    dpiY: check.printSpec?.dpiY || null,
+    issues: Array.isArray(check.issues) ? check.issues : [],
+    summary: seamCheckSummary(check),
+  };
 }
 
 function normalizeRepairableSeamIssue(check) {
@@ -5427,12 +5506,24 @@ function applyFullSizeEdgeCheck(check, fullSizeEdge) {
     return check;
   }
 
-  if (!check.issues.includes("最终JPG边缘硬线，不可修复")) {
-    check.issues.unshift("最终JPG边缘硬线，不可修复");
-  }
+  const repairableIssue = "最终JPG边缘硬线，可修复";
+  const unrepairableIssue = "最终JPG边缘硬线，不可修复";
+  const issue = shouldAiOffsetRepair({
+    ...check,
+    fullSizeEdge,
+    issues: [repairableIssue, ...(check.issues || [])],
+    finalIssueType: repairableIssue,
+    repairability: "repairable",
+  }) ? repairableIssue : unrepairableIssue;
+
+  check.issues = [issue, ...check.issues.filter((item) => item !== repairableIssue && item !== unrepairableIssue)];
   check.passed = false;
-  check.repairability = "unrepairable";
-  check.finalIssueType = "最终JPG边缘硬线，不可修复";
+  if (issue === repairableIssue) {
+    check.repairability = "repairable";
+  } else {
+    check.repairability = "unrepairable";
+  }
+  check.finalIssueType = issue;
   check.rating = seamRating(check);
   return check;
 }
@@ -6274,6 +6365,7 @@ els.autoEnhance?.addEventListener("change", saveSettings);
 els.enhanceStrength?.addEventListener("change", saveSettings);
 els.fissionStrength?.addEventListener("change", saveSettings);
 
+installQaTools();
 loadSettings();
 setEmptyState();
 checkServer();

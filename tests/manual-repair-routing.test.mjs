@@ -48,6 +48,18 @@ test("manual AI follow-up preserves the commercial download gate", () => {
   assert.match(aiFollowupSource, /未通过认证前不开放成品下载/, "failed AI follow-up should keep the user-facing no-download warning");
 });
 
+test("bounded final JPG edge hard lines are routed as AI-repairable", () => {
+  const { applyFullSizeEdgeCheck } = loadFinalEdgeHelpers();
+  const check = makeFinalEdgeHardLineCheck();
+
+  applyFullSizeEdgeCheck(check, { edgeRisk: true, score: 110 });
+
+  assert.equal(check.passed, false, "edge hard line should still fail certification");
+  assert.equal(check.repairability, "repairable");
+  assert.equal(check.finalIssueType, "最终JPG边缘硬线，可修复");
+  assert.equal(check.issues[0], "最终JPG边缘硬线，可修复");
+});
+
 test("closed edges with internal guide lines are classified as repairable, not terminal failures", () => {
   const normalizeRepairableSeamIssue = compileFunction(appSource, "normalizeRepairableSeamIssue");
   const check = makeClosedEdgeInternalLineCheck();
@@ -161,6 +173,17 @@ function loadMaskRenderer() {
   `)();
 }
 
+function loadFinalEdgeHelpers() {
+  const source = [
+    extractFunction(appSource, "seamRating"),
+    extractFunction(appSource, "shouldAiOffsetRepair"),
+    extractFunction(appSource, "applyFullSizeEdgeCheck"),
+  ].join("\n");
+  return Function(`"use strict"; ${source}
+    return { applyFullSizeEdgeCheck };
+  `)();
+}
+
 function createMaskContext(width, height) {
   return {
     imageData: null,
@@ -204,6 +227,36 @@ function makeAiOnlyRepairableCheck() {
     driftVertical: { worstScore: 39 },
     mirrorHorizontal: { worstScore: 86, mirrorRisk: true },
     mirrorVertical: { worstScore: 72, mirrorRisk: true },
+  };
+}
+
+function makeFinalEdgeHardLineCheck() {
+  return {
+    passed: false,
+    score: 63.57,
+    horizontalScore: 80.69,
+    verticalScore: 62.94,
+    cornerScore: 78.53,
+    repairability: "unrepairable",
+    finalIssueType: "横档未衔接，不可修复",
+    issues: ["横档未衔接，不可修复", "竖档未衔接，不可修复"],
+    borderHorizontal: { worstMismatch: 240 },
+    borderVertical: { worstMismatch: 210 },
+    localHorizontal: { worstScore: 90 },
+    localVertical: { worstScore: 78 },
+    internalHorizontal: { worstScore: 66 },
+    internalVertical: { worstScore: 58 },
+    bandHorizontal: { worstScore: 120 },
+    bandVertical: { worstScore: 112 },
+    detailHorizontal: { worstScore: 42 },
+    detailVertical: { worstScore: 40 },
+    tiledHorizontal: { worstScore: 150 },
+    tiledVertical: { worstScore: 142 },
+    tiledCorner: { worstScore: 95 },
+    driftHorizontal: { worstScore: 28 },
+    driftVertical: { worstScore: 24 },
+    mirrorHorizontal: { worstScore: 0, mirrorRisk: false },
+    mirrorVertical: { worstScore: 0, mirrorRisk: false },
   };
 }
 

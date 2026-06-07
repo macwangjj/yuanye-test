@@ -333,6 +333,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - If the gateway rejects masked edits, the existing unmasked maimai attempts still run afterward, preserving compatibility while giving true inpaint-style seam repair the first chance.
 - Tests cover maimai masked-attempt ordering and ensure masked auto fallback happens before unmasked edits.
 
+## 0.7.54 QA Seam Recheck Tools
+
+- Opening the workbench with `?qa=1` exposes `window.YUANYE_QA` for internal verification only; normal user sessions do not receive the QA object.
+- QA can run the same browser seam checker as the production UI and can also run a structure-only recheck that records print-spec metadata without allowing old low-spec history images through the commercial gate.
+- The standard generation, history, and download certification paths still call the full print-spec gate, so this tooling cannot certify undersized or non-300dpi artwork.
+- Bounded final JPG edge-hard-line failures are now marked as AI-repairable, so they route to Offset inpainting instead of being presented as terminal failures; extreme edge hard lines still remain unrepairable.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
