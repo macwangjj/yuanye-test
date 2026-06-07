@@ -14,6 +14,18 @@ test("server exposes background image generation jobs", () => {
   assert.match(serverSource, /sendJson\(response, 202, \{ job: publicGenerationJob\(job\) \}\)/);
 });
 
+test("slow image timeouts move to the next request form instead of retrying one slow attempt", () => {
+  const withTransientRetrySource = extractFunction(serverSource, "withTransientRetry");
+  const isSlowImageTimeoutErrorSource = extractFunction(serverSource, "isSlowImageTimeoutError");
+  const fetchWithTimeoutSource = extractFunction(serverSource, "fetchWithTimeout");
+
+  assert.match(withTransientRetrySource, /isSlowImageTimeoutError\(error\)/);
+  assert.match(withTransientRetrySource, /break/);
+  assert.match(isSlowImageTimeoutErrorSource, /图片接口等待超过/);
+  assert.match(isSlowImageTimeoutErrorSource, /UND_ERR_HEADERS_TIMEOUT/);
+  assert.match(fetchWithTimeoutSource, /isSlowImageTimeoutError\(error\)/);
+});
+
 test("frontend uses background jobs for long image generation and AI seam repair", () => {
   const requestGeneratedImageSource = extractFunction(appSource, "requestGeneratedImage");
   const aiOffsetRepairTaskSource = extractFunction(appSource, "aiOffsetRepairTask");

@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.60-test";
+const clientVersion = "0.7.62-test";
 const generateJobCreateTimeoutMs = 30000;
 const generateJobPollTimeoutMs = 30000;
 const generateJobMaxWaitMs = 20 * 60 * 1000;
@@ -1178,6 +1178,17 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
         }
       }
 
+      if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiInternalGuideRepair(lastCheck)) {
+        phase = "AI 内部导线修复";
+        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在让 AI 原位消除内部导线。`, 94);
+        const internalGuideRepairCheck = await improveWithAiInternalGuideRepair(task, lastCheck);
+        lastCheck = internalGuideRepairCheck || lastCheck;
+        if (lastCheck.passed) {
+          finalAction = "repair";
+          break;
+        }
+      }
+
       if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiOffsetRepair(lastCheck)) {
         phase = "AI 丝滑过渡修缝";
         setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在让 AI 生成丝滑过渡。`, 94);
@@ -1444,9 +1455,14 @@ async function repairTask(task, options = {}) {
   }
 
   const baseCheck = task.seamCheck || await checkSeamQuality(task.resultJpgUrl);
+  const canInternalGuide = canRunAiInternalGuideRepair(task, baseCheck);
   const canAiOffset = canRunAiOffsetRepair(task, baseCheck);
   const canEdgeBlend = shouldEdgeBlendRepair(baseCheck);
   const canForcePeriodic = shouldForcePeriodicRepair(baseCheck);
+
+  if (canInternalGuide) {
+    return await aiInternalGuideRepairFollowupTask(task, baseCheck, options);
+  }
 
   if (canAiOffset) {
     return await aiOffsetRepairFollowupTask(task, baseCheck, options);
@@ -1544,6 +1560,46 @@ async function aiOffsetRepairFollowupTask(task, baseCheck, options = {}) {
   }
 }
 
+async function aiInternalGuideRepairFollowupTask(task, baseCheck, options = {}) {
+  if (!task.resultJpgUrl) {
+    if (!options.quiet) showToast("请先生成图片");
+    return null;
+  }
+
+  task.nodes.repair.disabled = true;
+  if (!options.quiet) {
+    setTaskStatus(task, "生成中", "正在让 AI 原位修复内部导线和交叉点。", 90);
+  }
+
+  let repairCheck = baseCheck;
+  try {
+    repairCheck = await improveWithAiInternalGuideRepair(task, baseCheck);
+    task.repairCheck = repairCheck;
+    task.locallyRepaired = Boolean(repairCheck?.passed);
+    task.qualityPassed = Boolean(repairCheck?.passed);
+    task.nodes.select.disabled = !repairCheck?.passed;
+    task.nodes.select.checked = Boolean(repairCheck?.passed);
+    toggleTaskSelection(task);
+    updateTaskDownloadGate(task);
+
+    if (options.manual) {
+      await saveHistory(task, createHistoryMarker(repairCheck.passed ? "repair" : "review"), repairCheck.passed ? "repair" : "review");
+    }
+
+    if (!options.quiet) {
+      setTaskStatus(task, repairCheck.passed ? "已完成" : "需人工复核", repairCheck.passed
+        ? `AI 内部导线修复通过，${task.seamRating}，可以下载 JPG。`
+        : `AI 内部导线修复后仍未通过，${seamFailureMessage(repairCheck)}；未通过认证前不开放成品下载。`, 100);
+    }
+    return repairCheck;
+  } catch (error) {
+    if (!options.quiet) setTaskStatus(task, "失败", `AI 内部导线修复失败：${error.message}`, 100);
+    throw error;
+  } finally {
+    task.nodes.repair.disabled = options.quiet ? true : !shouldOfferTaskRepair(task, task.seamCheck || repairCheck);
+  }
+}
+
 async function forceSeamlessTask(task, options = {}) {
   if (!task.resultJpgUrl) {
     if (!options.quiet) showToast("请先生成图片");
@@ -1623,6 +1679,54 @@ async function tryCertifiedSeamlessFallback(task, baseCheck) {
   return { accepted: true, check: candidateCheck };
 }
 
+async function aiInternalGuideRepairTask(task, previousCheck) {
+  if (!task.resultJpgUrl) return null;
+
+  task.aiRepairAttempts += 1;
+  task.repairAttempts += 1;
+
+  const repairSourceUrl = task.resultDataUrl || task.resultJpgUrl;
+  const maskDataUrl = await makeInternalGuideRepairMaskDataUrl(repairSourceUrl);
+  const payload = await requestImageGeneration({
+    image: {
+      name: `${task.patternCode || "YUANYE"}-internal-guide-repair.png`,
+      type: "image/png",
+      dataUrl: repairSourceUrl,
+    },
+    mask: {
+      name: `${task.patternCode || "YUANYE"}-internal-guide-mask.png`,
+      type: "image/png",
+      dataUrl: maskDataUrl,
+    },
+    prompt: buildInternalGuideRepairPrompt(previousCheck),
+    size: els.size.value,
+  }, {
+    onPoll: (job) => {
+      if (job?.status === "running") {
+        setTaskStatus(task, "生成中", "AI 正在原位重绘内部导线和交叉点，请保持页面打开。", 94);
+      }
+    },
+  });
+
+  task.resultDataUrl = await blendMaskedRepairDataUrl(repairSourceUrl, payload.image.dataUrl, maskDataUrl, { strength: 1.28 });
+  task.resultJpgUrl = await makeJpg(task.resultDataUrl, makeTaskJpgOptions(task, {
+    enhance: shouldPrintClarityEnhance(previousCheck),
+    strength: Math.max(getEnhanceStrength(), 0.28),
+    skipAiRepair: true,
+    repair: false,
+  }));
+  task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+  const check = await runSeamCheck(task, true);
+  task.repairCheck = check;
+  task.locallyRepaired = check.passed;
+  task.qualityPassed = check.passed;
+  task.nodes.select.disabled = !check.passed;
+  task.nodes.select.checked = check.passed;
+  toggleTaskSelection(task);
+  updateTaskDownloadGate(task);
+  return check;
+}
+
 async function aiOffsetRepairTask(task, previousCheck) {
   if (!task.resultJpgUrl) return null;
 
@@ -1653,7 +1757,8 @@ async function aiOffsetRepairTask(task, previousCheck) {
     },
   });
 
-  const restoredDataUrl = await makeOffsetDataUrl(payload.image.dataUrl, { reverse: true, format: "png" });
+  const blendedOffsetDataUrl = await blendMaskedRepairDataUrl(offsetDataUrl, payload.image.dataUrl, maskDataUrl, { strength: 1.08 });
+  const restoredDataUrl = await makeOffsetDataUrl(blendedOffsetDataUrl, { reverse: true, format: "png" });
   task.resultDataUrl = restoredDataUrl;
   task.resultJpgUrl = await makeJpg(restoredDataUrl, makeTaskJpgOptions(task, {
     enhance: shouldPrintClarityEnhance(previousCheck),
@@ -1671,6 +1776,55 @@ async function aiOffsetRepairTask(task, previousCheck) {
   toggleTaskSelection(task);
   updateTaskDownloadGate(task);
   return check;
+}
+
+async function improveWithAiInternalGuideRepair(task, initialCheck) {
+  let best = {
+    dataUrl: task.resultDataUrl,
+    jpgUrl: task.resultJpgUrl,
+    check: initialCheck,
+  };
+  let currentCheck = initialCheck;
+
+  while (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiInternalGuideRepair(currentCheck)) {
+    const before = {
+      dataUrl: task.resultDataUrl,
+      jpgUrl: task.resultJpgUrl,
+      check: currentCheck,
+    };
+    const repairedCheck = await aiInternalGuideRepairTask(task, currentCheck);
+    if (!repairedCheck) break;
+
+    if (isSeamCheckBetter(repairedCheck, best.check)) {
+      best = {
+        dataUrl: task.resultDataUrl,
+        jpgUrl: task.resultJpgUrl,
+        check: repairedCheck,
+      };
+    } else {
+      task.resultDataUrl = before.dataUrl;
+      task.resultJpgUrl = before.jpgUrl;
+      task.seamCheck = before.check;
+      task.repairCheck = before.check;
+      task.seamScore = before.check.score;
+      task.seamRating = before.check.rating;
+      task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+      break;
+    }
+
+    currentCheck = repairedCheck;
+    if (currentCheck.passed || !shouldRefineAiSeamRepair(currentCheck, before.check)) break;
+  }
+
+  task.resultDataUrl = best.dataUrl;
+  task.resultJpgUrl = best.jpgUrl;
+  task.seamCheck = best.check;
+  task.repairCheck = best.check;
+  task.seamScore = best.check.score;
+  task.seamRating = best.check.rating;
+  task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+  task.nodes.message.textContent = seamCheckSummary(best.check);
+  return best.check;
 }
 
 async function improveWithAiOffsetRepair(task, initialCheck) {
@@ -1858,6 +2012,22 @@ function buildOffsetRepairPrompt(previousCheck = null) {
 9. 最终目标是把这张图再 Offset 移回后，上下左右能形成真正无缝循环。`;
 }
 
+function buildInternalGuideRepairPrompt(previousCheck = null) {
+  const issueText = previousCheck?.issues?.length ? previousCheck.issues.join("、") : "内部导线或平铺交汇风险";
+  return `这是一张四方连续印花单元，外侧上下左右边缘已经基本闭合，但画面内部仍可能残留平铺预览导线、网格硬线、交叉点硬斑或重复拼接痕迹。
+
+请只重绘蒙版开放的内部导线带和导线交叉点，不要移动、重画或破坏外侧边缘。上一轮检测问题：${issueText}。
+
+必须严格执行：
+1. 已提供蒙版：透明和半透明区域是允许重绘的内部导线带和导线交叉点；蒙版外侧必须尽量保持原图稳定。
+2. 重点把 1/4、1/3、1/2、2/3、3/4 附近的可见内部线、硬交叉点、十字痕迹、重复网格痕自然重绘成连续花枝、叶片、线条、背景纹理和织物颗粒。
+3. 外侧四边 12% 区域必须保持稳定，因为这些边缘已经用于四方连续闭合；不能新增白边、黑边、画框、阴影硬边或边缘拼接线。
+4. 小幅元素变化可以接受，但只能服务于消除内部导线和交叉点；不要把整张图改风格、改题材或大面积重构。
+5. 保持原图的配色、密度、复古植物纹样、笔触颗粒和面料高级感。
+6. 不要输出 2×2、3×3 或多块平铺预览，只输出单张完整图。
+7. 修复后的图仍必须作为单个四方连续印花单元使用，内部不应再出现平铺网格线。`;
+}
+
 function shouldHybridSeamRepair(check) {
   if (!check || check.passed) return false;
   const structuralIssue = check.issues?.some((issue) => (
@@ -1887,11 +2057,20 @@ function canRunAiOffsetRepair(task, check) {
   );
 }
 
+function canRunAiInternalGuideRepair(task, check) {
+  return Boolean(
+    task &&
+    (task.aiRepairAttempts || 0) < maxAiSeamRepairs &&
+    shouldAiInternalGuideRepair(check)
+  );
+}
+
 function shouldOfferTaskRepair(task, check) {
   return Boolean(
     check &&
     !check.passed &&
     (
+      canRunAiInternalGuideRepair(task, check) ||
       canRunAiOffsetRepair(task, check) ||
       shouldEdgeBlendRepair(check) ||
       shouldForcePeriodicRepair(check)
@@ -1960,6 +2139,35 @@ function shouldAiOffsetRepair(check) {
     cornerJunctionWorst <= 320 &&
     driftWorst <= 360 &&
     mirrorWorst <= 360
+  );
+}
+
+function shouldAiInternalGuideRepair(check) {
+  if (!check || check.passed) return false;
+  const issueText = [
+    check.finalIssueType,
+    ...(Array.isArray(check.issues) ? check.issues : []),
+  ].filter(Boolean).join(" ");
+  if (!/内部接缝线|四角平铺交汇|平铺预览中心线|平铺边带/.test(issueText)) return false;
+  if (/横档未衔接|竖档未衔接|回头没接|最终JPG边缘硬线|边缘错位漂移|花型元素叠加|局部花型叠加|镜像轴痕/.test(issueText)) return false;
+  const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
+  const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
+  const internalScore = Math.max(check.internalHorizontal?.score || 0, check.internalVertical?.score || 0);
+  const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
+  const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const cornerWorst = Math.max(check.cornerScore || 0, check.tiledCorner?.worstScore || 0);
+  const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
+  const borderObjectRisk = Boolean(check.borderHorizontal?.objectRisk || check.borderVertical?.objectRisk);
+  const driftRisk = Boolean(check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk);
+  const internalRisk = Boolean(check.internalHorizontal?.lineRisk || check.internalVertical?.lineRisk || internalWorst > 16 || internalScore > 9);
+  const cornerGuideRisk = Boolean(check.tiledCorner?.junctionRisk || cornerWorst > 14 || tiledWorst > 15);
+  return (
+    (internalRisk || cornerGuideRisk) &&
+    edgeDominant <= 8 &&
+    borderWorst <= 48 &&
+    driftWorst <= 8 &&
+    !borderObjectRisk &&
+    !driftRisk
   );
 }
 
@@ -2344,6 +2552,81 @@ function makeOffsetRepairMaskDataUrl(dataUrl) {
   });
 }
 
+function makeInternalGuideRepairMaskDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        drawInternalGuideRepairMask(ctx, canvas.width, canvas.height);
+        const png = canvas.toDataURL("image/png");
+        if (!png || png === "data:,") throw new Error("浏览器无法导出内部导线蒙版。");
+        resolve(png);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+}
+
+function blendMaskedRepairDataUrl(sourceDataUrl, repairedDataUrl, maskDataUrl, options = {}) {
+  return new Promise((resolve, reject) => {
+    const sourceImage = new Image();
+    const repairedImage = new Image();
+    const maskImage = new Image();
+    let loaded = 0;
+    const onLoad = () => {
+      loaded += 1;
+      if (loaded < 3) return;
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = sourceImage.width;
+        canvas.height = sourceImage.height;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+        const source = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(repairedImage, 0, 0, canvas.width, canvas.height);
+        const repaired = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(maskImage, 0, 0, canvas.width, canvas.height);
+        const mask = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const strength = options.strength ?? 1;
+
+        for (let index = 0; index < source.data.length; index += 4) {
+          const edit = Math.min(1, Math.max(0, (1 - mask.data[index + 3] / 255) * strength));
+          if (edit <= 0) continue;
+          for (let channel = 0; channel < 3; channel += 1) {
+            source.data[index + channel] = Math.round(source.data[index + channel] * (1 - edit) + repaired.data[index + channel] * edit);
+          }
+        }
+
+        ctx.putImageData(source, 0, 0);
+        const png = canvas.toDataURL("image/png");
+        if (!png || png === "data:,") throw new Error("浏览器无法导出蒙版合成图。");
+        resolve(png);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const onError = () => reject(new Error("蒙版合成图加载失败。"));
+    sourceImage.onload = onLoad;
+    repairedImage.onload = onLoad;
+    maskImage.onload = onLoad;
+    sourceImage.onerror = onError;
+    repairedImage.onerror = onError;
+    maskImage.onerror = onError;
+    sourceImage.src = sourceDataUrl;
+    repairedImage.src = repairedDataUrl;
+    maskImage.src = maskDataUrl;
+  });
+}
+
 function drawOffsetRepairMask(ctx, width, height) {
   const imageData = ctx.createImageData(width, height);
   const { data } = imageData;
@@ -2364,6 +2647,32 @@ function drawOffsetRepairMask(ctx, width, height) {
       const verticalGuideEdit = internalGuideLineEditStrength(x, width);
       const guideJunctionEdit = internalGuideJunctionEditStrength(x, y, width, height);
       const edit = Math.max(horizontalEdit, verticalEdit, horizontalGuideEdit, verticalGuideEdit, guideJunctionEdit);
+      const alpha = Math.round(255 * (1 - edit));
+      const index = (y * width + x) * 4;
+      data[index] = 255;
+      data[index + 1] = 255;
+      data[index + 2] = 255;
+      data[index + 3] = alpha;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function drawInternalGuideRepairMask(ctx, width, height) {
+  const imageData = ctx.createImageData(width, height);
+  const { data } = imageData;
+  const protectedEdgeX = width * 0.12;
+  const protectedEdgeY = height * 0.12;
+
+  for (let y = 0; y < height; y += 1) {
+    const protectY = y < protectedEdgeY || y > height - protectedEdgeY;
+    const horizontalGuideEdit = protectY ? 0 : internalGuideLineEditStrength(y, height);
+    for (let x = 0; x < width; x += 1) {
+      const protectX = x < protectedEdgeX || x > width - protectedEdgeX;
+      const verticalGuideEdit = protectX ? 0 : internalGuideLineEditStrength(x, width);
+      const guideJunctionEdit = (protectX || protectY) ? 0 : internalGuideJunctionEditStrength(x, y, width, height);
+      const edit = Math.max(horizontalGuideEdit, verticalGuideEdit, guideJunctionEdit);
       const alpha = Math.round(255 * (1 - edit));
       const index = (y * width + x) * 4;
       data[index] = 255;
@@ -2859,10 +3168,13 @@ function installQaTools() {
     seamCheckSummary,
     seamFailureMessage,
     shouldAiOffsetRepair,
+    shouldAiInternalGuideRepair,
     shouldOfferTaskRepair,
     normalizeRepairableSeamIssue,
     buildOffsetRepairPrompt,
+    buildInternalGuideRepairPrompt,
     makeOffsetRepairMaskDataUrl,
+    makeInternalGuideRepairMaskDataUrl,
   });
 
   const output = document.createElement("pre");

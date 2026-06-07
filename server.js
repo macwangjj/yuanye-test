@@ -19,7 +19,7 @@ const imageModel = (process.env.OPENAI_IMAGE_MODEL || "gpt-image-2").trim();
 const imageModelCandidates = unique([imageModel, "gpt-image-2", "gpt-image-1.5", "gpt-image-1"]);
 const apiBaseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
 const imageEditUrl = `${apiBaseUrl}/images/edits`;
-const appVersion = "0.7.60-test";
+const appVersion = "0.7.62-test";
 const appPassword = (process.env.YUANYE_PASSWORD || "").trim();
 const sessionSecret = (process.env.YUANYE_SESSION_SECRET || apiKey || appPassword || randomBytes(32).toString("hex")).trim();
 const authEnabled = appPassword.length > 0;
@@ -431,7 +431,7 @@ async function withTransientRetry(fn) {
       return await fn();
     } catch (error) {
       lastError = error;
-      if (!isTransientUpstreamError(error) || index === 2) break;
+      if (isSlowImageTimeoutError(error) || !isTransientUpstreamError(error) || index === 2) break;
       await delay(1200 * (index + 1));
     }
   }
@@ -476,6 +476,15 @@ function isTransientUpstreamError(error) {
     return false;
   }
   return /bad_response_status_code|openai_error|502|503|504|timeout|timed out|temporarily|upstream|ECONNRESET|socket|network/i.test(error.message);
+}
+
+function isSlowImageTimeoutError(error) {
+  const message = error?.message || "";
+  const causeCode = error?.cause?.code || "";
+  return (
+    /图片接口等待超过|Headers Timeout|body timeout|operation timed out|timed out after|TimeoutError/i.test(message) ||
+    /UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT/i.test(causeCode)
+  );
 }
 
 async function callImageEditJson({ imageDataUrl, prompt, size, highQuality, model }) {
@@ -544,7 +553,7 @@ async function fetchWithTimeout(url, options, timeoutMs, attempt) {
       signal: controller.signal,
     });
   } catch (error) {
-    if (error?.name === "AbortError") {
+    if (error?.name === "AbortError" || isSlowImageTimeoutError(error)) {
       throw new Error(`图片接口等待超过 ${Math.round(timeoutMs / 1000)} 秒，已自动停止本次尝试。（attempt=${attempt}）`);
     }
     throw error;

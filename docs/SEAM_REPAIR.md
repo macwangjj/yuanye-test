@@ -369,6 +369,21 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Normal generation and masked AI seam repair both use the same job path, while the older direct `/api/generate` route stays available as a compatibility fallback.
 - This improves deployed-site reliability for long seam-repair attempts without weakening the four-way repeat or print-clarity gates.
 
+## 0.7.61 Slow Timeout Failover
+
+- Slow image API header/body timeouts are now classified explicitly instead of surfacing as vague `fetch failed` errors.
+- When one image request form times out slowly, the server stops retrying that same slow form three times and moves to the next compatible attempt.
+- Short transient upstream failures can still retry, but long masked seam-repair stalls no longer burn repeated five-minute windows before trying the next request shape.
+- This keeps AI Offset repair more practical on gateways where one multipart/masked form may stall while another compatible form can still succeed.
+
+## 0.7.62 Original-Coordinate Internal Guide Repair
+
+- Near-pass candidates whose outside edges are already closed but still show internal guide lines now take a dedicated AI repair path before Offset repair.
+- This path does not offset the tile; it masks only the internal guide bands and guide-line junctions in the original coordinate system while protecting the outer 12% edge area.
+- The prompt explicitly tells the model not to move or redraw the already-closed outer edges, reducing the risk that AI fixes internal grid marks but introduces new final-edge hard lines.
+- Masked AI results are now composited back through the repair mask instead of replacing the full source image, so protected areas stay pixel-stable even if the upstream gateway returns a globally changed image.
+- If this original-coordinate repair does not improve the score, the candidate is rolled back and the existing Offset, local edge, or strict periodic fallbacks can continue.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

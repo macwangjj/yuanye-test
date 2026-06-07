@@ -217,13 +217,15 @@ function loadRepairAvailabilityHelpers() {
   const source = [
     "const maxAiSeamRepairs = 2;",
     extractFunction(appSource, "shouldEdgeBlendRepair"),
+    extractFunction(appSource, "shouldAiInternalGuideRepair"),
     extractFunction(appSource, "shouldAiOffsetRepair"),
     extractFunction(appSource, "shouldForcePeriodicRepair"),
+    extractFunction(appSource, "canRunAiInternalGuideRepair"),
     extractFunction(appSource, "canRunAiOffsetRepair"),
     extractFunction(appSource, "shouldOfferTaskRepair"),
   ].join("\n");
   return Function(`"use strict"; ${source}
-    return { shouldOfferTaskRepair, shouldEdgeBlendRepair, shouldForcePeriodicRepair, shouldAiOffsetRepair };
+    return { shouldOfferTaskRepair, shouldEdgeBlendRepair, shouldForcePeriodicRepair, shouldAiOffsetRepair, shouldAiInternalGuideRepair };
   `)();
 }
 
