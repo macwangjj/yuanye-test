@@ -189,6 +189,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `exportMode`, `tileColumns`, and `tileRows`, so history records show whether a file came from direct portrait export or periodic rectification.
 - Tests cover direct portrait export, square-to-`2 x 3` periodic rectification, and landscape outputs that remain too distorted to certify.
 
+## 0.7.35 Portrait-First API Attempts
+
+- The Maimai-compatible image gateway now exhausts requested-size `1024x1536` attempts, including high-quality multipart and curl variants, before falling back to `auto`.
+- This reduces avoidable square outputs from gateways that support portrait generation but need a different transport or quality option.
+- `auto` remains as a final fallback so generation can still proceed when the provider rejects explicit size parameters.
+- Tests cover the attempt order so requested portrait size cannot accidentally move behind `auto` again.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
