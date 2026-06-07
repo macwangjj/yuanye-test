@@ -115,6 +115,28 @@ test("edge drift check rejects shifted seam texture", () => {
   assert.ok(drift.worstScore > 13, `expected a visible drift score; got ${drift.worstScore}`);
 });
 
+test("tiled corner junction check allows aligned periodic corners", () => {
+  const width = 144;
+  const height = 144;
+  const data = makePeriodicPattern(width, height);
+  const corner = measureTiledCornerJunctionCore(data, width, height);
+
+  assert.equal(corner.junctionRisk, false, `aligned periodic corners should pass; got ${JSON.stringify(corner)}`);
+  assert.ok(corner.worstScore < 15, `periodic corner junction should stay quiet; got ${corner.worstScore}`);
+});
+
+test("tiled corner junction check rejects matching hard corner spot", () => {
+  const width = 144;
+  const height = 144;
+  const data = makePeriodicPattern(width, height);
+  paintMatchingCornerSpot(data, width, height, 14, [24, 21, 18]);
+
+  const corner = measureTiledCornerJunctionCore(data, width, height);
+
+  assert.equal(corner.junctionRisk, true, `matching corner spot should be rejected; got ${JSON.stringify(corner)}`);
+  assert.ok(corner.worstScore > 18, `expected a visible corner-junction score; got ${corner.worstScore}`);
+});
+
 test("print clarity check allows sharp printable texture and rejects blurred output", () => {
   const width = 160;
   const height = 160;
@@ -258,6 +280,30 @@ function paintShiftedMatchingEdge(data, width, height, direction, depth, shift) 
       data[targetIndex + 1] = source[sourceIndex + 1];
       data[targetIndex + 2] = source[sourceIndex + 2];
       data[targetIndex + 3] = 255;
+    }
+  }
+}
+
+function paintMatchingCornerSpot(data, width, height, radius, color) {
+  const corners = [
+    [0, 0, 1, 1],
+    [width - 1, 0, -1, 1],
+    [0, height - 1, 1, -1],
+    [width - 1, height - 1, -1, -1],
+  ];
+
+  for (const [originX, originY, sx, sy] of corners) {
+    for (let dy = 0; dy < radius; dy += 1) {
+      for (let dx = 0; dx < radius; dx += 1) {
+        if (Math.hypot(dx, dy) > radius) continue;
+        const x = originX + dx * sx;
+        const y = originY + dy * sy;
+        const i = (y * width + x) * 4;
+        data[i] = color[0];
+        data[i + 1] = color[1];
+        data[i + 2] = color[2];
+        data[i + 3] = 255;
+      }
     }
   }
 }
@@ -495,6 +541,110 @@ function measureEdgeDriftCore(data, width, height, direction) {
     dominantShift,
     confidence: bestConfidence,
     driftRisk: worstScore > 13.5 || score > 8.5 || (shiftedWindows >= 2 && shiftedRatio > 0.08 && averageShift >= 2.4 && worstScore > 9.5),
+  };
+}
+
+function measureTiledCornerJunctionCore(data, width, height) {
+  const size = Math.min(width, height);
+  const radius = Math.max(8, Math.min(48, Math.round(size * 0.018)));
+  const innerGap = Math.max(radius * 3, Math.round(size * 0.055));
+  const sampleStep = Math.max(1, Math.round(radius / 8));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let spotSamples = 0;
+  let seamSamples = 0;
+  let haloSamples = 0;
+  let centerJumpTotal = 0;
+  let haloShiftTotal = 0;
+  let activityTotal = 0;
+
+  for (let dy = 0; dy < radius; dy += sampleStep) {
+    for (let dx = 0; dx < radius; dx += sampleStep) {
+      const br = { x: width - 1 - dx, y: height - 1 - dy };
+      const bl = { x: dx, y: height - 1 - dy };
+      const tr = { x: width - 1 - dx, y: dy };
+      const tl = { x: dx, y: dy };
+      const ibr = { x: Math.max(0, br.x - innerGap), y: Math.max(0, br.y - innerGap) };
+      const ibl = { x: Math.min(width - 1, bl.x + innerGap), y: Math.max(0, bl.y - innerGap) };
+      const itr = { x: Math.max(0, tr.x - innerGap), y: Math.min(height - 1, tr.y + innerGap) };
+      const itl = { x: Math.min(width - 1, tl.x + innerGap), y: Math.min(height - 1, tl.y + innerGap) };
+      const nbr = { x: Math.max(0, br.x - sampleStep), y: Math.max(0, br.y - sampleStep) };
+      const nbl = { x: Math.min(width - 1, bl.x + sampleStep), y: Math.max(0, bl.y - sampleStep) };
+      const ntr = { x: Math.max(0, tr.x - sampleStep), y: Math.min(height - 1, tr.y + sampleStep) };
+      const ntl = { x: Math.min(width - 1, tl.x + sampleStep), y: Math.min(height - 1, tl.y + sampleStep) };
+
+      const verticalJump = (
+        pixelDistance(data, width, br.x, br.y, bl.x, bl.y) +
+        pixelDistance(data, width, tr.x, tr.y, tl.x, tl.y)
+      ) / 2;
+      const horizontalJump = (
+        pixelDistance(data, width, br.x, br.y, tr.x, tr.y) +
+        pixelDistance(data, width, bl.x, bl.y, tl.x, tl.y)
+      ) / 2;
+      const diagonalJump = (
+        pixelDistance(data, width, br.x, br.y, tl.x, tl.y) +
+        pixelDistance(data, width, bl.x, bl.y, tr.x, tr.y)
+      ) / 2;
+      const cornerToInner = (
+        pixelDistance(data, width, br.x, br.y, ibr.x, ibr.y) +
+        pixelDistance(data, width, bl.x, bl.y, ibl.x, ibl.y) +
+        pixelDistance(data, width, tr.x, tr.y, itr.x, itr.y) +
+        pixelDistance(data, width, tl.x, tl.y, itl.x, itl.y)
+      ) / 4;
+      const localActivity = (
+        pixelDistance(data, width, br.x, br.y, nbr.x, nbr.y) +
+        pixelDistance(data, width, bl.x, bl.y, nbl.x, nbl.y) +
+        pixelDistance(data, width, tr.x, tr.y, ntr.x, ntr.y) +
+        pixelDistance(data, width, tl.x, tl.y, ntl.x, ntl.y)
+      ) / 4;
+      const innerActivity = (
+        pixelDistance(data, width, ibr.x, ibr.y, Math.max(0, ibr.x - sampleStep), Math.max(0, ibr.y - sampleStep)) +
+        pixelDistance(data, width, ibl.x, ibl.y, Math.min(width - 1, ibl.x + sampleStep), Math.max(0, ibl.y - sampleStep)) +
+        pixelDistance(data, width, itr.x, itr.y, Math.max(0, itr.x - sampleStep), Math.min(height - 1, itr.y + sampleStep)) +
+        pixelDistance(data, width, itl.x, itl.y, Math.min(width - 1, itl.x + sampleStep), Math.min(height - 1, itl.y + sampleStep))
+      ) / 4;
+      const centerJump = Math.max(verticalJump, horizontalJump);
+      const gradientBudget = Math.max(
+        5.5,
+        innerActivity * 0.34,
+        localActivity * Math.min(18, innerGap / Math.max(1, sampleStep)) * 0.74,
+      );
+      const haloShift = Math.max(0, cornerToInner - gradientBudget);
+      const activityDrop = Math.max(0, innerActivity - localActivity);
+      const seamSpike = Math.max(0, centerJump - Math.max(9, localActivity * 0.72));
+      const diagonalSpike = Math.max(0, diagonalJump - Math.max(10, localActivity * 0.8));
+      const sampleScore = seamSpike * 0.52 + haloShift * 0.46 + activityDrop * 0.82 + diagonalSpike * 0.22;
+
+      total += sampleScore;
+      count += 1;
+      centerJumpTotal += centerJump;
+      haloShiftTotal += haloShift;
+      activityTotal += localActivity;
+      worstScore = Math.max(worstScore, sampleScore);
+      if (sampleScore > 13) spotSamples += 1;
+      if (seamSpike > 9) seamSamples += 1;
+      if (haloShift > 13 || activityDrop > 8.5) haloSamples += 1;
+    }
+  }
+
+  const score = total / Math.max(1, count);
+  const spotRatio = spotSamples / Math.max(1, count);
+  const seamRatio = seamSamples / Math.max(1, count);
+  const haloRatio = haloSamples / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    centerJump: centerJumpTotal / Math.max(1, count),
+    haloShift: haloShiftTotal / Math.max(1, count),
+    localActivity: activityTotal / Math.max(1, count),
+    spotSamples,
+    seamSamples,
+    haloSamples,
+    spotRatio,
+    seamRatio,
+    haloRatio,
+    junctionRisk: worstScore > 18 || score > 9.5 || (spotSamples >= 3 && spotRatio > 0.08) || (haloSamples >= 3 && haloRatio > 0.12) || (seamSamples >= 2 && seamRatio > 0.08),
   };
 }
 

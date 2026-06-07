@@ -6,7 +6,7 @@ This test build treats four-way repeat quality as a production requirement, not 
 
 1. Generate one repeat tile from the reference image.
 2. Export to the print target size: `4961 x 7559 px`, 300 dpi.
-3. Run seam scoring on the raw print export first. The checker looks at opposite borders, corners, local break windows, internal guide lines, one-sided border-object risk, edge-band artifacts, edge drift, and the center cross that appears in a real 2x2 tiled preview.
+3. Run seam scoring on the raw print export first. The checker looks at opposite borders, corners, local break windows, internal guide lines, one-sided border-object risk, edge-band artifacts, edge drift, the center cross, and the four-corner junction that appears in a real 2x2 tiled preview.
 4. Use `repairSeams` as the primary local repair path:
    - feathered weights instead of a hard border average;
    - opposite-edge matching;
@@ -32,6 +32,7 @@ A tile can look numerically seamless while still failing in a 2x2 preview: the b
 - no visible flat, blurry, or shifted edge band after tiling.
 - no hard center cross, halo, or fake border stripe in a simulated 2x2 tile preview.
 - no edge drift where the opposite borders only line up after sliding a few pixels.
+- no hard spot, star joint, dark/light knot, or fake patch where all four tile corners meet.
 
 ## Why `repairSeams` Changed
 
@@ -76,6 +77,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Strong drift is routed to AI Offset repair first, because local edge averaging can make this failure look blurrier instead of truly seamless.
 - The task summary now includes a `错位` score, and certification metadata stores a `driftScore`.
 - Tests include both aligned periodic edge texture that must pass and shifted edge texture that must fail.
+
+## 0.7.20 Four-Corner Junction Gate
+
+- The quality gate now samples the exact 2x2 preview point where the four original tile corners meet.
+- It rejects matching corner patches that would create a visible dot, star joint, hard knot, or dark/light square at every repeat intersection.
+- Strong corner-junction risk is routed to AI Offset repair first, since the center cross mask is the right place to redraw that junction naturally.
+- The task summary now includes a `交汇` score, and certification metadata stores `cornerJunctionScore`.
+- Tests include aligned periodic corners that must pass and a matching hard corner spot that must fail.
 
 ## 0.7.13 Success-Rate Changes
 

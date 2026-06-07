@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.19-test";
+const clientVersion = "0.7.20-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -524,6 +524,7 @@ function buildPrintCertification(task, actionType = "generate") {
       horizontalScore: typeof check.horizontalScore === "number" ? check.horizontalScore : null,
       verticalScore: typeof check.verticalScore === "number" ? check.verticalScore : null,
       tiledScore: Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0),
+      cornerJunctionScore: check.tiledCorner?.score || 0,
       edgeBandScore: Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0),
       driftScore: Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0),
       clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
@@ -1346,7 +1347,8 @@ function taskRepairableVisualIssue(check) {
     issue.includes("细线接缝") ||
     issue.includes("轻微色差") ||
     issue.includes("接缝过渡") ||
-    issue.includes("边缘错位漂移")
+    issue.includes("边缘错位漂移") ||
+    issue.includes("四角平铺交汇")
   )));
 }
 
@@ -1363,6 +1365,7 @@ function seamVisualWorstScore(check) {
     check?.bandVertical?.worstScore || 0,
     check?.tiledHorizontal?.worstScore || 0,
     check?.tiledVertical?.worstScore || 0,
+    check?.tiledCorner?.worstScore || 0,
     check?.driftHorizontal?.worstScore || 0,
     check?.driftVertical?.worstScore || 0,
   );
@@ -1411,9 +1414,12 @@ function shouldEdgeBlendRepair(check) {
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const cornerJunctionWorst = check.tiledCorner?.worstScore || 0;
+  const cornerJunctionRisk = check.tiledCorner?.junctionRisk || check.issues?.some((issue) => issue.includes("四角平铺交汇"));
   const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
   const driftRisk = check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk || check.issues?.some((issue) => issue.includes("边缘错位漂移"));
   if (driftRisk && driftWorst > 10) return false;
+  if (cornerJunctionRisk && cornerJunctionWorst > 10) return false;
   return (
     check.score <= 36 &&
     edgeDominant <= 48 &&
@@ -1426,7 +1432,8 @@ function shouldEdgeBlendRepair(check) {
       issue.includes("细线接缝") ||
       issue.includes("轻微色差") ||
       issue.includes("平铺边带") ||
-      issue.includes("平铺预览")
+      issue.includes("平铺预览") ||
+      issue.includes("四角平铺交汇")
     )) || check.repairability === "repairable")
   );
 }
@@ -1439,6 +1446,7 @@ function shouldAiOffsetRepair(check) {
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
   const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const cornerJunctionWorst = check.tiledCorner?.worstScore || 0;
   const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
   return (
     check.score <= 420 &&
@@ -1448,6 +1456,7 @@ function shouldAiOffsetRepair(check) {
     internalWorst <= 240 &&
     bandWorst <= 320 &&
     tiledWorst <= 320 &&
+    cornerJunctionWorst <= 320 &&
     driftWorst <= 360
   );
 }
@@ -1459,7 +1468,9 @@ function shouldForcePeriodicRepair(check) {
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
   const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
+  const cornerJunctionWorst = check.tiledCorner?.worstScore || 0;
   const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
+  if (check.tiledCorner?.junctionRisk) return false;
   if (check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk) return false;
   return (
     check.score <= 140 &&
@@ -1468,6 +1479,7 @@ function shouldForcePeriodicRepair(check) {
     internalWorst <= 90 &&
     bandWorst <= 140 &&
     tiledWorst <= 140 &&
+    cornerJunctionWorst <= 90 &&
     driftWorst <= 90
   );
 }
@@ -1537,6 +1549,7 @@ function seamCheckSummary(check) {
     `角点 ${check.cornerScore.toFixed(2)}`,
     `边带 ${Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0).toFixed(2)}`,
     `平铺 ${Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0).toFixed(2)}`,
+    `交汇 ${Number(check.tiledCorner?.score || 0).toFixed(2)}`,
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
     `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
@@ -1986,6 +1999,7 @@ function measureSeamQuality(ctx, width, height) {
   const bandVertical = measureEdgeBandArtifact(data, width, height, "vertical");
   const tiledHorizontal = measureTiledPreviewSeam(data, width, height, "horizontal");
   const tiledVertical = measureTiledPreviewSeam(data, width, height, "vertical");
+  const tiledCorner = measureTiledCornerJunction(data, width, height);
   const driftHorizontal = measureEdgeDrift(data, width, height, "horizontal");
   const driftVertical = measureEdgeDrift(data, width, height, "vertical");
   const clarity = measurePrintClarity(data, width, height);
@@ -2003,6 +2017,7 @@ function measureSeamQuality(ctx, width, height) {
   const maxBandWorst = Math.max(bandHorizontal.worstScore, bandVertical.worstScore);
   const maxTiledScore = Math.max(tiledHorizontal.score, tiledVertical.score);
   const maxTiledWorst = Math.max(tiledHorizontal.worstScore, tiledVertical.worstScore);
+  const cornerJunctionRisk = tiledCorner.junctionRisk || tiledCorner.score > 8.5 || tiledCorner.worstScore > 16;
   const maxDriftScore = Math.max(driftHorizontal.score, driftVertical.score);
   const maxDriftWorst = Math.max(driftHorizontal.worstScore, driftVertical.worstScore);
   const driftRisk = driftHorizontal.driftRisk || driftVertical.driftRisk;
@@ -2024,6 +2039,7 @@ function measureSeamQuality(ctx, width, height) {
   if (severeVertical) issues.push("竖档未衔接，不可修复");
   if (severeCorner) issues.push("回头没接，不可修复");
   if (!issues.length && driftRisk) issues.push("边缘错位漂移，可修复");
+  if (!issues.length && cornerJunctionRisk) issues.push("四角平铺交汇明显，可修复");
   if (overlayRisk && !driftRisk && !severeHorizontal && !severeVertical) issues.push("花型元素叠加，不可修复");
   if (transitionRisk && !driftRisk && !overlayRisk && !severeHorizontal && !severeVertical) issues.push("接缝过渡不自然，不可修复");
   if (!issues.length && tiledPreviewRisk) issues.push("平铺预览中心线明显，可修复");
@@ -2032,7 +2048,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
-  const score = horizontalScore * 0.21 + verticalScore * 0.21 + cornerScore * 0.08 + maxLocalScore * 0.09 + maxInternalScore * 0.09 + maxBandScore * 0.11 + maxTiledScore * 0.12 + maxDriftScore * 0.09;
+  const score = horizontalScore * 0.2 + verticalScore * 0.2 + cornerScore * 0.07 + maxLocalScore * 0.09 + maxInternalScore * 0.09 + maxBandScore * 0.1 + maxTiledScore * 0.11 + tiledCorner.score * 0.06 + maxDriftScore * 0.08;
   let repairability = issues.some((issue) => issue.includes("不可修复"))
     ? "unrepairable"
     : issues.some((issue) => issue.includes("可修复"))
@@ -2048,6 +2064,9 @@ function measureSeamQuality(ctx, width, height) {
     maxBandWorst <= 16 &&
     maxTiledScore <= 7.4 &&
     maxTiledWorst <= 15 &&
+    tiledCorner.score <= 7.2 &&
+    tiledCorner.worstScore <= 15 &&
+    !cornerJunctionRisk &&
     maxDriftScore <= 7.2 &&
     maxDriftWorst <= 14 &&
     !driftRisk &&
@@ -2077,6 +2096,7 @@ function measureSeamQuality(ctx, width, height) {
     bandVertical,
     tiledHorizontal,
     tiledVertical,
+    tiledCorner,
     driftHorizontal,
     driftVertical,
     clarity,
@@ -2577,6 +2597,116 @@ function measureEdgeDrift(data, width, height, direction) {
       worstScore > 13.5 ||
       score > 8.5 ||
       (shiftedWindows >= 2 && shiftedRatio > 0.08 && averageShift >= 2.4 && worstScore > 9.5)
+    ),
+  };
+}
+
+function measureTiledCornerJunction(data, width, height) {
+  const size = Math.min(width, height);
+  const radius = Math.max(8, Math.min(48, Math.round(size * 0.018)));
+  const innerGap = Math.max(radius * 3, Math.round(size * 0.055));
+  const sampleStep = Math.max(1, Math.round(radius / 8));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let spotSamples = 0;
+  let seamSamples = 0;
+  let haloSamples = 0;
+  let centerJumpTotal = 0;
+  let haloShiftTotal = 0;
+  let activityTotal = 0;
+
+  for (let dy = 0; dy < radius; dy += sampleStep) {
+    for (let dx = 0; dx < radius; dx += sampleStep) {
+      const br = { x: width - 1 - dx, y: height - 1 - dy };
+      const bl = { x: dx, y: height - 1 - dy };
+      const tr = { x: width - 1 - dx, y: dy };
+      const tl = { x: dx, y: dy };
+      const ibr = { x: Math.max(0, br.x - innerGap), y: Math.max(0, br.y - innerGap) };
+      const ibl = { x: Math.min(width - 1, bl.x + innerGap), y: Math.max(0, bl.y - innerGap) };
+      const itr = { x: Math.max(0, tr.x - innerGap), y: Math.min(height - 1, tr.y + innerGap) };
+      const itl = { x: Math.min(width - 1, tl.x + innerGap), y: Math.min(height - 1, tl.y + innerGap) };
+      const nbr = { x: Math.max(0, br.x - sampleStep), y: Math.max(0, br.y - sampleStep) };
+      const nbl = { x: Math.min(width - 1, bl.x + sampleStep), y: Math.max(0, bl.y - sampleStep) };
+      const ntr = { x: Math.max(0, tr.x - sampleStep), y: Math.min(height - 1, tr.y + sampleStep) };
+      const ntl = { x: Math.min(width - 1, tl.x + sampleStep), y: Math.min(height - 1, tl.y + sampleStep) };
+
+      const verticalJump = (
+        pixelDistance(data, width, br.x, br.y, bl.x, bl.y) +
+        pixelDistance(data, width, tr.x, tr.y, tl.x, tl.y)
+      ) / 2;
+      const horizontalJump = (
+        pixelDistance(data, width, br.x, br.y, tr.x, tr.y) +
+        pixelDistance(data, width, bl.x, bl.y, tl.x, tl.y)
+      ) / 2;
+      const diagonalJump = (
+        pixelDistance(data, width, br.x, br.y, tl.x, tl.y) +
+        pixelDistance(data, width, bl.x, bl.y, tr.x, tr.y)
+      ) / 2;
+      const cornerToInner = (
+        pixelDistance(data, width, br.x, br.y, ibr.x, ibr.y) +
+        pixelDistance(data, width, bl.x, bl.y, ibl.x, ibl.y) +
+        pixelDistance(data, width, tr.x, tr.y, itr.x, itr.y) +
+        pixelDistance(data, width, tl.x, tl.y, itl.x, itl.y)
+      ) / 4;
+      const localActivity = (
+        pixelDistance(data, width, br.x, br.y, nbr.x, nbr.y) +
+        pixelDistance(data, width, bl.x, bl.y, nbl.x, nbl.y) +
+        pixelDistance(data, width, tr.x, tr.y, ntr.x, ntr.y) +
+        pixelDistance(data, width, tl.x, tl.y, ntl.x, ntl.y)
+      ) / 4;
+      const innerActivity = (
+        pixelDistance(data, width, ibr.x, ibr.y, Math.max(0, ibr.x - sampleStep), Math.max(0, ibr.y - sampleStep)) +
+        pixelDistance(data, width, ibl.x, ibl.y, Math.min(width - 1, ibl.x + sampleStep), Math.max(0, ibl.y - sampleStep)) +
+        pixelDistance(data, width, itr.x, itr.y, Math.max(0, itr.x - sampleStep), Math.min(height - 1, itr.y + sampleStep)) +
+        pixelDistance(data, width, itl.x, itl.y, Math.min(width - 1, itl.x + sampleStep), Math.min(height - 1, itl.y + sampleStep))
+      ) / 4;
+      const centerJump = Math.max(verticalJump, horizontalJump);
+      const gradientBudget = Math.max(
+        5.5,
+        innerActivity * 0.34,
+        localActivity * Math.min(18, innerGap / Math.max(1, sampleStep)) * 0.74,
+      );
+      const haloShift = Math.max(0, cornerToInner - gradientBudget);
+      const activityDrop = Math.max(0, innerActivity - localActivity);
+      const seamSpike = Math.max(0, centerJump - Math.max(9, localActivity * 0.72));
+      const diagonalSpike = Math.max(0, diagonalJump - Math.max(10, localActivity * 0.8));
+      const sampleScore = seamSpike * 0.52 + haloShift * 0.46 + activityDrop * 0.82 + diagonalSpike * 0.22;
+
+      total += sampleScore;
+      count += 1;
+      centerJumpTotal += centerJump;
+      haloShiftTotal += haloShift;
+      activityTotal += localActivity;
+      worstScore = Math.max(worstScore, sampleScore);
+      if (sampleScore > 13) spotSamples += 1;
+      if (seamSpike > 9) seamSamples += 1;
+      if (haloShift > 13 || activityDrop > 8.5) haloSamples += 1;
+    }
+  }
+
+  const score = total / Math.max(1, count);
+  const spotRatio = spotSamples / Math.max(1, count);
+  const seamRatio = seamSamples / Math.max(1, count);
+  const haloRatio = haloSamples / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    centerJump: centerJumpTotal / Math.max(1, count),
+    haloShift: haloShiftTotal / Math.max(1, count),
+    localActivity: activityTotal / Math.max(1, count),
+    spotSamples,
+    seamSamples,
+    haloSamples,
+    spotRatio,
+    seamRatio,
+    haloRatio,
+    junctionRisk: (
+      worstScore > 18 ||
+      score > 9.5 ||
+      (spotSamples >= 3 && spotRatio > 0.08) ||
+      (haloSamples >= 3 && haloRatio > 0.12) ||
+      (seamSamples >= 2 && seamRatio > 0.08)
     ),
   };
 }
