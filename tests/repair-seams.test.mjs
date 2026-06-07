@@ -150,6 +150,20 @@ test("print clarity check allows sharp printable texture and rejects blurred out
   assert.ok(sharpClarity.detailScore > blurredClarity.detailScore * 1.8, `sharp detail should be much higher; sharp=${sharpClarity.detailScore} blurred=${blurredClarity.detailScore}`);
 });
 
+test("seam detail loss check rejects a soft blurred seam band", () => {
+  const width = 160;
+  const height = 160;
+  const sharp = makeSharpPrintPattern(width, height);
+  const sharpDetail = measureSeamDetailLossCore(sharp, width, height, "horizontal");
+  const softened = new Uint8ClampedArray(sharp);
+  softenSeamBand(softened, width, height, "horizontal", 16, 3);
+  const softenedDetail = measureSeamDetailLossCore(softened, width, height, "horizontal");
+
+  assert.equal(sharpDetail.detailLossRisk, false, `sharp seam detail should pass; got ${JSON.stringify(sharpDetail)}`);
+  assert.equal(softenedDetail.detailLossRisk, true, `soft seam band should be rejected; got ${JSON.stringify(softenedDetail)}`);
+  assert.ok(softenedDetail.worstScore > sharpDetail.worstScore * 2, `soft seam should score much worse; sharp=${sharpDetail.worstScore} soft=${softenedDetail.worstScore}`);
+});
+
 function makeSyntheticPattern(width, height) {
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y += 1) {
@@ -214,6 +228,23 @@ function boxBlur(source, width, height, radius) {
     }
   }
   return output;
+}
+
+function softenSeamBand(data, width, height, direction, band, radius) {
+  const blurred = boxBlur(data, width, height, radius);
+  const horizontal = direction === "horizontal";
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const active = horizontal ? y < band || y >= height - band : x < band || x >= width - band;
+      if (!active) continue;
+      const i = (y * width + x) * 4;
+      data[i] = blurred[i];
+      data[i + 1] = blurred[i + 1];
+      data[i + 2] = blurred[i + 2];
+      data[i + 3] = 255;
+    }
+  }
 }
 
 function makePeriodicPattern(width, height) {
@@ -418,6 +449,97 @@ function measureEdgeBandArtifactCore(data, width, height, direction) {
     flatRatio,
     shiftRatio,
     bandRisk: worstScore > 20 || score > 12 || (flatWindows >= 2 && flatRatio > 0.06) || (shiftWindows >= 2 && shiftRatio > 0.08),
+  };
+}
+
+function measureSeamDetailLossCore(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const band = Math.max(5, Math.min(28, Math.round(cross * 0.012)));
+  const innerGap = Math.max(band * 4, Math.round(cross * 0.055));
+  const windowSize = Math.max(28, Math.min(128, Math.round(length / 24)));
+  const windowStep = Math.max(12, Math.round(windowSize * 0.5));
+  const sampleStep = Math.max(1, Math.round(windowSize / 18));
+  const depthStep = Math.max(1, Math.round(band / 7));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let softWindows = 0;
+  let activeWindows = 0;
+
+  for (let start = 0; start < length; start += windowStep) {
+    const end = Math.min(length, start + windowSize);
+    let edgeDetailTotal = 0;
+    let innerDetailTotal = 0;
+    let edgeGradientTotal = 0;
+    let innerGradientTotal = 0;
+    let sampleCount = 0;
+
+    for (let along = start; along < end; along += sampleStep) {
+      const safeAlong = Math.min(length - 2, Math.max(1, along));
+
+      for (let depth = 1; depth <= band; depth += depthStep) {
+        const aCross = Math.min(cross - 2, Math.max(1, depth));
+        const bCross = Math.max(1, cross - 1 - depth);
+        const innerA = Math.min(cross - 2, depth + innerGap);
+        const innerB = Math.max(1, cross - 1 - depth - innerGap);
+        const ax = horizontal ? safeAlong : aCross;
+        const ay = horizontal ? aCross : safeAlong;
+        const bx = horizontal ? safeAlong : bCross;
+        const by = horizontal ? bCross : safeAlong;
+        const iax = horizontal ? safeAlong : innerA;
+        const iay = horizontal ? innerA : safeAlong;
+        const ibx = horizontal ? safeAlong : innerB;
+        const iby = horizontal ? innerB : safeAlong;
+        const edgeA = pixelDetailAt(data, width, height, ax, ay);
+        const edgeB = pixelDetailAt(data, width, height, bx, by);
+        const innerDetailA = pixelDetailAt(data, width, height, iax, iay);
+        const innerDetailB = pixelDetailAt(data, width, height, ibx, iby);
+
+        edgeDetailTotal += (edgeA.detail + edgeB.detail) / 2;
+        innerDetailTotal += (innerDetailA.detail + innerDetailB.detail) / 2;
+        edgeGradientTotal += (edgeA.gradient + edgeB.gradient) / 2;
+        innerGradientTotal += (innerDetailA.gradient + innerDetailB.gradient) / 2;
+        sampleCount += 1;
+      }
+    }
+
+    const edgeDetail = edgeDetailTotal / Math.max(1, sampleCount);
+    const innerDetail = innerDetailTotal / Math.max(1, sampleCount);
+    const edgeGradient = edgeGradientTotal / Math.max(1, sampleCount);
+    const innerGradient = innerGradientTotal / Math.max(1, sampleCount);
+    const detailLoss = Math.max(0, innerDetail - edgeDetail);
+    const gradientLoss = Math.max(0, innerGradient - edgeGradient);
+    const lossRatio = detailLoss / Math.max(1, innerDetail);
+    const activeInterior = innerDetail > 3.8 || innerGradient > 7.5;
+    const windowScore = activeInterior
+      ? detailLoss * 1.18 + Math.max(0, lossRatio - 0.32) * 16 + gradientLoss * 0.18
+      : 0;
+
+    total += windowScore;
+    count += 1;
+    worstScore = Math.max(worstScore, windowScore);
+    if (activeInterior) activeWindows += 1;
+    if (
+      activeInterior &&
+      (windowScore > 10.5 || (lossRatio > 0.48 && detailLoss > 2.6 && gradientLoss > 2.5))
+    ) {
+      softWindows += 1;
+    }
+  }
+
+  const score = total / Math.max(1, count);
+  const softRatio = softWindows / Math.max(1, count);
+  const activeRatio = activeWindows / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    softWindows,
+    activeWindows,
+    softRatio,
+    activeRatio,
+    detailLossRisk: worstScore > 17 || score > 9.2 || (softWindows >= 2 && softRatio > 0.08 && activeRatio > 0.18),
   };
 }
 
@@ -797,6 +919,20 @@ function measurePrintClarityCore(data, width, height) {
     riskScore,
     softBlurRisk,
     blurRisk,
+  };
+}
+
+function pixelDetailAt(data, width, height, x, y) {
+  const safeX = Math.min(width - 2, Math.max(1, Math.round(x)));
+  const safeY = Math.min(height - 2, Math.max(1, Math.round(y)));
+  const center = pixelLuminance(data, width, safeX, safeY);
+  const left = pixelLuminance(data, width, safeX - 1, safeY);
+  const right = pixelLuminance(data, width, safeX + 1, safeY);
+  const top = pixelLuminance(data, width, safeX, safeY - 1);
+  const bottom = pixelLuminance(data, width, safeX, safeY + 1);
+  return {
+    detail: Math.abs(center * 4 - left - right - top - bottom) / 4,
+    gradient: (Math.abs(right - left) + Math.abs(bottom - top)) / 2,
   };
 }
 

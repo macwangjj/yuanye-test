@@ -102,6 +102,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores the actual width, height, DPI values, DPI unit, and `printSpecPassed` result.
 - Tests cover the print-spec helper and the stricter certification gate.
 
+## 0.7.23 Seam Detail-Loss Gate
+
+- The quality gate now compares high-frequency detail in the seam band against nearby interior texture.
+- It rejects candidates where local or AI repair makes the seam band visibly soft, misty, or over-smoothed while the surrounding textile detail remains sharp.
+- The task summary now includes a `细节` score, and certification metadata stores `seamDetailLossScore`.
+- `接缝细节发虚，可修复` is routed through the repair chain instead of being treated as a certified handoff.
+- Tests cover sharp seam bands that must pass and blurred seam bands that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

@@ -37,6 +37,7 @@ test("saved history records retain print certification metadata", () => {
   assert.match(appSource, /dpiMetadata: "JFIF inch density"/, "certification should state the JPG DPI metadata contract");
   assert.match(appSource, /printSpecPassed: check\.printSpec\?\.passed === true/, "certification should retain actual print-spec result");
   assert.match(appSource, /cornerJunctionScore: check\.tiledCorner\?\.score \|\| 0/, "certification should retain four-corner junction score");
+  assert.match(appSource, /seamDetailLossScore: Math\.max\(check\.detailHorizontal\?\.score \|\| 0, check\.detailVertical\?\.score \|\| 0\)/, "certification should retain seam detail-loss score");
   assert.match(appSource, /driftScore: Math\.max\(check\.driftHorizontal\?\.score \|\| 0, check\.driftVertical\?\.score \|\| 0\)/, "certification should retain edge-drift score");
   assert.match(serverSource, /certification: payload\.certification \|\| null/, "server should persist certification metadata");
 });

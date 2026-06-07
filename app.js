@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.22-test";
+const clientVersion = "0.7.23-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -535,6 +535,7 @@ function buildPrintCertification(task, actionType = "generate") {
       tiledScore: Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0),
       cornerJunctionScore: check.tiledCorner?.score || 0,
       edgeBandScore: Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0),
+      seamDetailLossScore: Math.max(check.detailHorizontal?.score || 0, check.detailVertical?.score || 0),
       driftScore: Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0),
       clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
@@ -1372,6 +1373,8 @@ function seamVisualWorstScore(check) {
     check?.internalVertical?.worstScore || 0,
     check?.bandHorizontal?.worstScore || 0,
     check?.bandVertical?.worstScore || 0,
+    check?.detailHorizontal?.worstScore || 0,
+    check?.detailVertical?.worstScore || 0,
     check?.tiledHorizontal?.worstScore || 0,
     check?.tiledVertical?.worstScore || 0,
     check?.tiledCorner?.worstScore || 0,
@@ -1404,6 +1407,7 @@ function shouldHybridSeamRepair(check) {
     issue.includes("横档未衔接") ||
     issue.includes("竖档未衔接") ||
     issue.includes("接缝过渡不自然") ||
+    issue.includes("接缝细节发虚") ||
     issue.includes("细线接缝") ||
     issue.includes("轻微色差")
   ));
@@ -1423,6 +1427,7 @@ function shouldEdgeBlendRepair(check) {
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const detailWorst = Math.max(check.detailHorizontal?.worstScore || 0, check.detailVertical?.worstScore || 0);
   const cornerJunctionWorst = check.tiledCorner?.worstScore || 0;
   const cornerJunctionRisk = check.tiledCorner?.junctionRisk || check.issues?.some((issue) => issue.includes("四角平铺交汇"));
   const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
@@ -1434,10 +1439,12 @@ function shouldEdgeBlendRepair(check) {
     edgeDominant <= 48 &&
     borderWorst <= 145 &&
     bandWorst <= 95 &&
+    detailWorst <= 95 &&
     (check.issues?.some((issue) => (
       issue.includes("横档") ||
       issue.includes("竖档") ||
       issue.includes("接缝过渡") ||
+      issue.includes("接缝细节发虚") ||
       issue.includes("细线接缝") ||
       issue.includes("轻微色差") ||
       issue.includes("平铺边带") ||
@@ -1454,6 +1461,7 @@ function shouldAiOffsetRepair(check) {
   const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const detailWorst = Math.max(check.detailHorizontal?.worstScore || 0, check.detailVertical?.worstScore || 0);
   const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
   const cornerJunctionWorst = check.tiledCorner?.worstScore || 0;
   const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
@@ -1464,6 +1472,7 @@ function shouldAiOffsetRepair(check) {
     localWorst <= 280 &&
     internalWorst <= 240 &&
     bandWorst <= 320 &&
+    detailWorst <= 320 &&
     tiledWorst <= 320 &&
     cornerJunctionWorst <= 320 &&
     driftWorst <= 360
@@ -1476,6 +1485,7 @@ function shouldForcePeriodicRepair(check) {
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const bandWorst = Math.max(check.bandHorizontal?.worstScore || 0, check.bandVertical?.worstScore || 0);
+  const detailWorst = Math.max(check.detailHorizontal?.worstScore || 0, check.detailVertical?.worstScore || 0);
   const tiledWorst = Math.max(check.tiledHorizontal?.worstScore || 0, check.tiledVertical?.worstScore || 0);
   const cornerJunctionWorst = check.tiledCorner?.worstScore || 0;
   const driftWorst = Math.max(check.driftHorizontal?.worstScore || 0, check.driftVertical?.worstScore || 0);
@@ -1487,6 +1497,7 @@ function shouldForcePeriodicRepair(check) {
     borderWorst <= 520 &&
     internalWorst <= 90 &&
     bandWorst <= 140 &&
+    detailWorst <= 140 &&
     tiledWorst <= 140 &&
     cornerJunctionWorst <= 90 &&
     driftWorst <= 90
@@ -1559,6 +1570,7 @@ function seamCheckSummary(check) {
     `左右 ${check.verticalScore.toFixed(2)}`,
     `角点 ${check.cornerScore.toFixed(2)}`,
     `边带 ${Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0).toFixed(2)}`,
+    `细节 ${Math.max(check.detailHorizontal?.score || 0, check.detailVertical?.score || 0).toFixed(2)}`,
     `平铺 ${Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0).toFixed(2)}`,
     `交汇 ${Number(check.tiledCorner?.score || 0).toFixed(2)}`,
     `错位 ${Math.max(check.driftHorizontal?.score || 0, check.driftVertical?.score || 0).toFixed(2)}`,
@@ -1577,6 +1589,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("横档未衔接，不可修复")) return "横档未衔接，不可修复";
   if (check.issues?.includes("竖档未衔接，不可修复")) return "竖档未衔接，不可修复";
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
+  if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
   return "检测到接缝风险";
 }
@@ -2010,6 +2023,8 @@ function measureSeamQuality(ctx, width, height) {
   const borderVertical = measureBorderObjectRisk(data, width, height, "vertical");
   const bandHorizontal = measureEdgeBandArtifact(data, width, height, "horizontal");
   const bandVertical = measureEdgeBandArtifact(data, width, height, "vertical");
+  const detailHorizontal = measureSeamDetailLoss(data, width, height, "horizontal");
+  const detailVertical = measureSeamDetailLoss(data, width, height, "vertical");
   const tiledHorizontal = measureTiledPreviewSeam(data, width, height, "horizontal");
   const tiledVertical = measureTiledPreviewSeam(data, width, height, "vertical");
   const tiledCorner = measureTiledCornerJunction(data, width, height);
@@ -2028,6 +2043,9 @@ function measureSeamQuality(ctx, width, height) {
   const maxInternalWorst = Math.max(internalHorizontal.worstScore, internalVertical.worstScore);
   const maxBandScore = Math.max(bandHorizontal.score, bandVertical.score);
   const maxBandWorst = Math.max(bandHorizontal.worstScore, bandVertical.worstScore);
+  const maxDetailLossScore = Math.max(detailHorizontal.score, detailVertical.score);
+  const maxDetailLossWorst = Math.max(detailHorizontal.worstScore, detailVertical.worstScore);
+  const detailLossRisk = detailHorizontal.detailLossRisk || detailVertical.detailLossRisk;
   const maxTiledScore = Math.max(tiledHorizontal.score, tiledVertical.score);
   const maxTiledWorst = Math.max(tiledHorizontal.worstScore, tiledVertical.worstScore);
   const cornerJunctionRisk = tiledCorner.junctionRisk || tiledCorner.score > 8.5 || tiledCorner.worstScore > 16;
@@ -2044,6 +2062,7 @@ function measureSeamQuality(ctx, width, height) {
   const overlayRisk = (maxPeakRatio > 0.16 && maxEdgeScore > 5.8) || (maxLocalWorst > 26 && maxLocalScore > 15) || (maxInternalWorst > 24 && maxInternalScore > 12);
   const transitionRisk = (maxEdgeScore > 8.2 && maxPeakRatio > 0.08) || (maxLocalWorst > 20 && maxLocalScore > 11) || (maxInternalWorst > 18 && maxInternalScore > 9);
   const bandArtifactRisk = maxBandScore > 11 || maxBandWorst > 18 || bandHorizontal.bandRisk || bandVertical.bandRisk;
+  const seamDetailRisk = maxDetailLossScore > 8.8 || maxDetailLossWorst > 16 || detailLossRisk;
   const tiledPreviewRisk = maxTiledScore > 9.8 || maxTiledWorst > 17 || tiledHorizontal.lineRisk || tiledVertical.lineRisk;
   const mildColor = maxEdgeScore > 3.4 && maxEdgeScore <= 7.2 && cornerScore <= 8.5 && maxPeakRatio <= 0.08 && maxLocalWorst <= 18 && maxInternalWorst <= 14;
   const thinLine = maxEdgeScore <= 6.8 && maxPeakRatio > 0.08 && maxPeakRatio <= 0.14 && cornerScore <= 8.5 && maxLocalWorst <= 20 && maxInternalWorst <= 16;
@@ -2057,11 +2076,12 @@ function measureSeamQuality(ctx, width, height) {
   if (transitionRisk && !driftRisk && !overlayRisk && !severeHorizontal && !severeVertical) issues.push("接缝过渡不自然，不可修复");
   if (!issues.length && tiledPreviewRisk) issues.push("平铺预览中心线明显，可修复");
   if (!issues.length && bandArtifactRisk) issues.push("平铺边带明显，可修复");
+  if (!issues.length && seamDetailRisk) issues.push("接缝细节发虚，可修复");
   if (!issues.length && clarity.blurRisk) issues.push("成品清晰度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
-  const score = horizontalScore * 0.2 + verticalScore * 0.2 + cornerScore * 0.07 + maxLocalScore * 0.09 + maxInternalScore * 0.09 + maxBandScore * 0.1 + maxTiledScore * 0.11 + tiledCorner.score * 0.06 + maxDriftScore * 0.08;
+  const score = horizontalScore * 0.18 + verticalScore * 0.18 + cornerScore * 0.07 + maxLocalScore * 0.08 + maxInternalScore * 0.08 + maxBandScore * 0.09 + maxDetailLossScore * 0.08 + maxTiledScore * 0.1 + tiledCorner.score * 0.06 + maxDriftScore * 0.08;
   let repairability = issues.some((issue) => issue.includes("不可修复"))
     ? "unrepairable"
     : issues.some((issue) => issue.includes("可修复"))
@@ -2075,6 +2095,9 @@ function measureSeamQuality(ctx, width, height) {
     cornerScore <= 7.5 &&
     maxBandScore <= 8.5 &&
     maxBandWorst <= 16 &&
+    maxDetailLossScore <= 7.2 &&
+    maxDetailLossWorst <= 14 &&
+    !detailLossRisk &&
     maxTiledScore <= 7.4 &&
     maxTiledWorst <= 15 &&
     tiledCorner.score <= 7.2 &&
@@ -2107,6 +2130,8 @@ function measureSeamQuality(ctx, width, height) {
     borderVertical,
     bandHorizontal,
     bandVertical,
+    detailHorizontal,
+    detailVertical,
     tiledHorizontal,
     tiledVertical,
     tiledCorner,
@@ -2483,6 +2508,101 @@ function measureEdgeBandArtifact(data, width, height, direction) {
       score > 12 ||
       (flatWindows >= 2 && flatRatio > 0.06) ||
       (shiftWindows >= 2 && shiftRatio > 0.08)
+    ),
+  };
+}
+
+function measureSeamDetailLoss(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const band = Math.max(5, Math.min(28, Math.round(cross * 0.012)));
+  const innerGap = Math.max(band * 4, Math.round(cross * 0.055));
+  const windowSize = Math.max(28, Math.min(128, Math.round(length / 24)));
+  const windowStep = Math.max(12, Math.round(windowSize * 0.5));
+  const sampleStep = Math.max(1, Math.round(windowSize / 18));
+  const depthStep = Math.max(1, Math.round(band / 7));
+  let total = 0;
+  let count = 0;
+  let worstScore = 0;
+  let softWindows = 0;
+  let activeWindows = 0;
+
+  for (let start = 0; start < length; start += windowStep) {
+    const end = Math.min(length, start + windowSize);
+    let edgeDetailTotal = 0;
+    let innerDetailTotal = 0;
+    let edgeGradientTotal = 0;
+    let innerGradientTotal = 0;
+    let sampleCount = 0;
+
+    for (let along = start; along < end; along += sampleStep) {
+      const safeAlong = Math.min(length - 2, Math.max(1, along));
+
+      for (let depth = 1; depth <= band; depth += depthStep) {
+        const aCross = Math.min(cross - 2, Math.max(1, depth));
+        const bCross = Math.max(1, cross - 1 - depth);
+        const innerA = Math.min(cross - 2, depth + innerGap);
+        const innerB = Math.max(1, cross - 1 - depth - innerGap);
+        const ax = horizontal ? safeAlong : aCross;
+        const ay = horizontal ? aCross : safeAlong;
+        const bx = horizontal ? safeAlong : bCross;
+        const by = horizontal ? bCross : safeAlong;
+        const iax = horizontal ? safeAlong : innerA;
+        const iay = horizontal ? innerA : safeAlong;
+        const ibx = horizontal ? safeAlong : innerB;
+        const iby = horizontal ? innerB : safeAlong;
+        const edgeA = pixelDetailAt(data, width, height, ax, ay);
+        const edgeB = pixelDetailAt(data, width, height, bx, by);
+        const innerDetailA = pixelDetailAt(data, width, height, iax, iay);
+        const innerDetailB = pixelDetailAt(data, width, height, ibx, iby);
+
+        edgeDetailTotal += (edgeA.detail + edgeB.detail) / 2;
+        innerDetailTotal += (innerDetailA.detail + innerDetailB.detail) / 2;
+        edgeGradientTotal += (edgeA.gradient + edgeB.gradient) / 2;
+        innerGradientTotal += (innerDetailA.gradient + innerDetailB.gradient) / 2;
+        sampleCount += 1;
+      }
+    }
+
+    const edgeDetail = edgeDetailTotal / Math.max(1, sampleCount);
+    const innerDetail = innerDetailTotal / Math.max(1, sampleCount);
+    const edgeGradient = edgeGradientTotal / Math.max(1, sampleCount);
+    const innerGradient = innerGradientTotal / Math.max(1, sampleCount);
+    const detailLoss = Math.max(0, innerDetail - edgeDetail);
+    const gradientLoss = Math.max(0, innerGradient - edgeGradient);
+    const lossRatio = detailLoss / Math.max(1, innerDetail);
+    const activeInterior = innerDetail > 3.8 || innerGradient > 7.5;
+    const windowScore = activeInterior
+      ? detailLoss * 1.18 + Math.max(0, lossRatio - 0.32) * 16 + gradientLoss * 0.18
+      : 0;
+
+    total += windowScore;
+    count += 1;
+    worstScore = Math.max(worstScore, windowScore);
+    if (activeInterior) activeWindows += 1;
+    if (
+      activeInterior &&
+      (windowScore > 10.5 || (lossRatio > 0.48 && detailLoss > 2.6 && gradientLoss > 2.5))
+    ) {
+      softWindows += 1;
+    }
+  }
+
+  const score = total / Math.max(1, count);
+  const softRatio = softWindows / Math.max(1, count);
+  const activeRatio = activeWindows / Math.max(1, count);
+  return {
+    score,
+    worstScore,
+    softWindows,
+    activeWindows,
+    softRatio,
+    activeRatio,
+    detailLossRisk: (
+      worstScore > 17 ||
+      score > 9.2 ||
+      (softWindows >= 2 && softRatio > 0.08 && activeRatio > 0.18)
     ),
   };
 }
@@ -2873,6 +2993,20 @@ function measurePrintClarity(data, width, height) {
     riskScore,
     softBlurRisk,
     blurRisk,
+  };
+}
+
+function pixelDetailAt(data, width, height, x, y) {
+  const safeX = Math.min(width - 2, Math.max(1, Math.round(x)));
+  const safeY = Math.min(height - 2, Math.max(1, Math.round(y)));
+  const center = pixelLuminance(data, width, safeX, safeY);
+  const left = pixelLuminance(data, width, safeX - 1, safeY);
+  const right = pixelLuminance(data, width, safeX + 1, safeY);
+  const top = pixelLuminance(data, width, safeX, safeY - 1);
+  const bottom = pixelLuminance(data, width, safeX, safeY + 1);
+  return {
+    detail: Math.abs(center * 4 - left - right - top - bottom) / 4,
+    gradient: (Math.abs(right - left) + Math.abs(bottom - top)) / 2,
   };
 }
 
