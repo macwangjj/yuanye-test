@@ -148,6 +148,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `mirrorAxisScore` and `mirrorAxisWorstScore`; history downloads require the current mirror-axis gate.
 - Tests cover normal all-over texture that must pass and a synthetic mirrored center-axis artifact that must fail.
 
+## 0.7.29 Pre-Tiled Preview Gate
+
+- The quality gate now compares the four quadrants of the generated image to detect accidental 2x2 preview output.
+- If multiple quadrant pairs are too similar, the image is rejected as `疑似平铺预览输出，不可修复`; this means the model produced a preview/montage instead of one printable repeat unit.
+- This issue is routed to regeneration rather than seam repair, because the scale and composition are wrong even if the edges are technically continuous.
+- Certification metadata stores `preTiledPreviewScore` and `preTiledDuplicatePairs`; history downloads require the current pre-tiled preview gate.
+- Tests cover a normal all-over tile that must pass and a synthetic 2x2 repeated output that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

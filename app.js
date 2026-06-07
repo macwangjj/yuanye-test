@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.28-test";
+const clientVersion = "0.7.29-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -495,7 +495,8 @@ function recordHasCertifiedDownload(record) {
     typeof gate.seamDetailLossScore === "number" &&
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
-    typeof gate.mirrorAxisScore === "number"
+    typeof gate.mirrorAxisScore === "number" &&
+    typeof gate.preTiledPreviewScore === "number"
   );
 }
 
@@ -558,6 +559,8 @@ function buildPrintCertification(task, actionType = "generate") {
       edgeMotifActivity: typeof check.layoutBalance?.edgeActivity === "number" ? check.layoutBalance.edgeActivity : null,
       mirrorAxisScore: Math.max(check.mirrorHorizontal?.score || 0, check.mirrorVertical?.score || 0),
       mirrorAxisWorstScore: Math.max(check.mirrorHorizontal?.worstScore || 0, check.mirrorVertical?.worstScore || 0),
+      preTiledPreviewScore: typeof check.preTiledPreview?.score === "number" ? check.preTiledPreview.score : null,
+      preTiledDuplicatePairs: typeof check.preTiledPreview?.duplicatePairs === "number" ? check.preTiledPreview.duplicatePairs : null,
       issues: Array.isArray(check.issues) ? check.issues : [],
     },
   };
@@ -1451,7 +1454,7 @@ function shouldHybridSeamRepair(check) {
 
 function shouldEdgeBlendRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出"))) return false;
   if (check.issues?.some((issue) => issue.includes("镜像轴痕"))) return false;
   if (check.issues?.some((issue) => issue.includes("花型元素叠加") || issue.includes("回头没接"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
@@ -1486,7 +1489,7 @@ function shouldEdgeBlendRepair(check) {
 
 function shouldAiOffsetRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出"))) return false;
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const localWorst = Math.max(check.localHorizontal?.worstScore || 0, check.localVertical?.worstScore || 0);
@@ -1514,7 +1517,7 @@ function shouldAiOffsetRepair(check) {
 
 function shouldForcePeriodicRepair(check) {
   if (!check || check.passed) return false;
-  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中"))) return false;
+  if (check.issues?.some((issue) => issue.includes("花型信息量不足") || issue.includes("花型分布过于集中") || issue.includes("平铺预览输出"))) return false;
   const borderWorst = Math.max(check.borderHorizontal?.worstMismatch || 0, check.borderVertical?.worstMismatch || 0);
   const internalWorst = Math.max(check.internalHorizontal?.worstScore || 0, check.internalVertical?.worstScore || 0);
   const edgeDominant = Math.max(check.horizontalScore || 0, check.verticalScore || 0);
@@ -1615,6 +1618,7 @@ function seamCheckSummary(check) {
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
     `镜像 ${Math.max(check.mirrorHorizontal?.score || 0, check.mirrorVertical?.score || 0).toFixed(2)}`,
+    `预平铺 ${Number(check.preTiledPreview?.score || 0).toFixed(2)}`,
     check.printSpec?.passed === true ? "规格通过" : "规格失败",
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
@@ -1631,6 +1635,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("回头没接，不可修复")) return "回头没接，不可修复";
   if (check.issues?.includes("花型信息量不足，不可修复")) return "花型信息量不足，不可修复";
   if (check.issues?.includes("花型分布过于集中，不可修复")) return "花型分布过于集中，不可修复";
+  if (check.issues?.includes("疑似平铺预览输出，不可修复")) return "疑似平铺预览输出，不可修复";
   if (check.issues?.includes("镜像轴痕明显，可修复")) return "镜像轴痕明显，可修复";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
@@ -2078,6 +2083,7 @@ function measureSeamQuality(ctx, width, height) {
   const layoutBalance = measurePatternBalance(data, width, height);
   const mirrorHorizontal = measureMirrorAxisArtifact(data, width, height, "horizontal");
   const mirrorVertical = measureMirrorAxisArtifact(data, width, height, "vertical");
+  const preTiledPreview = measurePreTiledPreviewArtifact(data, width, height);
   const peakLimitH = Math.max(18, Math.round((band * samplesX) * 0.12));
   const peakLimitV = Math.max(18, Math.round((band * samplesY) * 0.12));
   const peakRatioH = horizontalPeaks / Math.max(1, band * samplesX);
@@ -2102,6 +2108,7 @@ function measureSeamQuality(ctx, width, height) {
   const maxMirrorScore = Math.max(mirrorHorizontal.score, mirrorVertical.score);
   const maxMirrorWorst = Math.max(mirrorHorizontal.worstScore, mirrorVertical.worstScore);
   const mirrorRisk = mirrorHorizontal.mirrorRisk || mirrorVertical.mirrorRisk;
+  const preTiledPreviewRisk = preTiledPreview.duplicateRisk;
   const issues = [];
 
   const horizontalMismatchRisk = horizontalScore > 9.5 || horizontalPeaks > peakLimitH || localHorizontal.structuralRisk || internalHorizontal.lineRisk;
@@ -2122,6 +2129,7 @@ function measureSeamQuality(ctx, width, height) {
   if (severeCorner) issues.push("回头没接，不可修复");
   if (!issues.length && richness.lowInformationRisk) issues.push("花型信息量不足，不可修复");
   if (!issues.length && layoutBalance.centerDominanceRisk) issues.push("花型分布过于集中，不可修复");
+  if (!issues.length && preTiledPreviewRisk) issues.push("疑似平铺预览输出，不可修复");
   if (!issues.length && mirrorRisk) issues.push("镜像轴痕明显，可修复");
   if (!issues.length && driftRisk) issues.push("边缘错位漂移，可修复");
   if (!issues.length && cornerJunctionRisk) issues.push("四角平铺交汇明显，可修复");
@@ -2134,7 +2142,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
-  const score = horizontalScore * 0.16 + verticalScore * 0.16 + cornerScore * 0.07 + maxLocalScore * 0.08 + maxInternalScore * 0.08 + maxBandScore * 0.08 + maxDetailLossScore * 0.08 + maxTiledScore * 0.09 + tiledCorner.score * 0.06 + maxDriftScore * 0.07 + maxMirrorScore * 0.07;
+  const score = horizontalScore * 0.15 + verticalScore * 0.15 + cornerScore * 0.07 + maxLocalScore * 0.08 + maxInternalScore * 0.08 + maxBandScore * 0.08 + maxDetailLossScore * 0.08 + maxTiledScore * 0.09 + tiledCorner.score * 0.06 + maxDriftScore * 0.07 + maxMirrorScore * 0.06 + preTiledPreview.score * 0.03;
   let repairability = issues.some((issue) => issue.includes("不可修复"))
     ? "unrepairable"
     : issues.some((issue) => issue.includes("可修复"))
@@ -2162,6 +2170,7 @@ function measureSeamQuality(ctx, width, height) {
     maxMirrorScore <= 6.8 &&
     maxMirrorWorst <= 13 &&
     !mirrorRisk &&
+    !preTiledPreviewRisk &&
     !richness.lowInformationRisk &&
     !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
@@ -2197,6 +2206,7 @@ function measureSeamQuality(ctx, width, height) {
     driftVertical,
     mirrorHorizontal,
     mirrorVertical,
+    preTiledPreview,
     clarity,
     richness,
     layoutBalance,
@@ -3301,6 +3311,109 @@ function measureMirrorAxisArtifact(data, width, height, direction) {
       worstScore > 12.5 ||
       score > 6.8 ||
       (mirrorWindows >= 4 && mirrorWindowRatio > 0.18 && activeWindowRatio > 0.2 && mirrorSampleRatio > 0.18 && score > 5.6 && worstScore > 8)
+    ),
+  };
+}
+
+function measurePreTiledPreviewArtifact(data, width, height) {
+  const halfW = Math.floor(width / 2);
+  const halfH = Math.floor(height / 2);
+  if (halfW < 8 || halfH < 8) {
+    return {
+      score: 0,
+      duplicatePairs: 0,
+      activePairs: 0,
+      bestPairRatio: 1,
+      duplicateRisk: false,
+    };
+  }
+
+  const pairs = [
+    measureRepeatedTilePair(data, width, height, halfW, halfH, halfW, 0),
+    measureRepeatedTilePair(data, width, height, halfW, halfH, 0, halfH),
+    measureRepeatedTilePair(data, width, height, halfW, halfH, halfW, halfH),
+  ];
+  const duplicatePairs = pairs.filter((pair) => pair.duplicate).length;
+  const activePairs = pairs.filter((pair) => pair.activeRatio > 0.2).length;
+  const score = pairs.reduce((sum, pair) => sum + pair.score, 0) / Math.max(1, pairs.length);
+  const worstScore = Math.max(...pairs.map((pair) => pair.score));
+  const bestPairRatio = Math.min(...pairs.map((pair) => pair.mismatchRatio));
+  const averageSimilarity = pairs.reduce((sum, pair) => sum + pair.similarRatio, 0) / Math.max(1, pairs.length);
+
+  return {
+    score,
+    worstScore,
+    duplicatePairs,
+    activePairs,
+    bestPairRatio,
+    averageSimilarity,
+    pairs,
+    duplicateRisk: (
+      duplicatePairs >= 2 &&
+      activePairs >= 2 &&
+      score > 5.8 &&
+      worstScore > 8 &&
+      averageSimilarity > 0.22 &&
+      bestPairRatio < 0.48
+    ),
+  };
+}
+
+function measureRepeatedTilePair(data, width, height, tileW, tileH, dx, dy) {
+  const step = Math.max(1, Math.round(Math.min(tileW, tileH) / 90));
+  const margin = Math.max(2, step * 2);
+  let mismatchTotal = 0;
+  let activityTotal = 0;
+  let similarSamples = 0;
+  let activeSamples = 0;
+  let count = 0;
+
+  for (let y = margin; y < tileH - margin; y += step) {
+    for (let x = margin; x < tileW - margin; x += step) {
+      const ax = x;
+      const ay = y;
+      const bx = x + dx;
+      const by = y + dy;
+      if (bx < 1 || bx >= width - 1 || by < 1 || by >= height - 1) continue;
+      const detailA = pixelDetailAt(data, width, height, ax, ay);
+      const detailB = pixelDetailAt(data, width, height, bx, by);
+      const activity = (
+        detailA.gradient * 0.42 +
+        detailA.detail * 0.9 +
+        detailB.gradient * 0.42 +
+        detailB.detail * 0.9
+      ) / 2;
+      const mismatch = pixelDistance(data, width, ax, ay, bx, by);
+
+      mismatchTotal += mismatch;
+      activityTotal += activity;
+      count += 1;
+      if (activity > 5.8) activeSamples += 1;
+      if (activity > 6.4 && mismatch < Math.max(5.2, activity * 0.42)) similarSamples += 1;
+    }
+  }
+
+  const mismatch = mismatchTotal / Math.max(1, count);
+  const activity = activityTotal / Math.max(1, count);
+  const mismatchRatio = mismatch / Math.max(1, activity);
+  const similarRatio = similarSamples / Math.max(1, count);
+  const activeRatio = activeSamples / Math.max(1, count);
+  const score = activeRatio > 0.2
+    ? Math.max(0, activity * 0.56 - mismatch) * (0.65 + Math.min(0.9, similarRatio * 2.4)) + Math.max(0, 0.44 - mismatchRatio) * 9
+    : 0;
+
+  return {
+    mismatch,
+    activity,
+    mismatchRatio,
+    similarRatio,
+    activeRatio,
+    score,
+    duplicate: (
+      activeRatio > 0.2 &&
+      similarRatio > 0.22 &&
+      mismatchRatio < 0.48 &&
+      score > 5.8
     ),
   };
 }

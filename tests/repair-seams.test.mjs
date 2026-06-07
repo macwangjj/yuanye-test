@@ -189,6 +189,19 @@ test("mirror axis check rejects mechanical center-axis symmetry", () => {
   assert.ok(mirroredAxis.worstScore > alloverMirror.worstScore * 2, `mirrored axis should score much worse; allover=${alloverMirror.worstScore} mirrored=${mirroredAxis.worstScore}`);
 });
 
+test("pre-tiled preview check rejects 2x2 repeated outputs", () => {
+  const width = 180;
+  const height = 180;
+  const allover = makeSharpPrintPattern(width, height);
+  const preTiled = makePreTiledPreviewPattern(width, height);
+  const alloverCheck = measurePreTiledPreviewArtifactCore(allover, width, height);
+  const preTiledCheck = measurePreTiledPreviewArtifactCore(preTiled, width, height);
+
+  assert.equal(alloverCheck.duplicateRisk, false, `single all-over tile should pass pre-tiled gate; got ${JSON.stringify(alloverCheck)}`);
+  assert.equal(preTiledCheck.duplicateRisk, true, `2x2 repeated preview should be rejected; got ${JSON.stringify(preTiledCheck)}`);
+  assert.ok(preTiledCheck.duplicatePairs >= 2, `pre-tiled output should have multiple duplicate quadrant pairs; got ${preTiledCheck.duplicatePairs}`);
+});
+
 test("seam detail loss check rejects a soft blurred seam band", () => {
   const width = 160;
   const height = 160;
@@ -301,6 +314,28 @@ function makeMirroredAxisPattern(width, height, direction) {
       data[target] = data[source];
       data[target + 1] = data[source + 1];
       data[target + 2] = data[source + 2];
+      data[target + 3] = 255;
+    }
+  }
+
+  return data;
+}
+
+function makePreTiledPreviewPattern(width, height) {
+  const tileW = Math.floor(width / 2);
+  const tileH = Math.floor(height / 2);
+  const tile = makeSharpPrintPattern(tileW, tileH);
+  const data = new Uint8ClampedArray(width * height * 4);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sx = x % tileW;
+      const sy = y % tileH;
+      const source = (sy * tileW + sx) * 4;
+      const target = (y * width + x) * 4;
+      data[target] = tile[source];
+      data[target + 1] = tile[source + 1];
+      data[target + 2] = tile[source + 2];
       data[target + 3] = 255;
     }
   }
@@ -1272,6 +1307,109 @@ function measureMirrorAxisArtifactCore(data, width, height, direction) {
       worstScore > 12.5 ||
       score > 6.8 ||
       (mirrorWindows >= 4 && mirrorWindowRatio > 0.18 && activeWindowRatio > 0.2 && mirrorSampleRatio > 0.18 && score > 5.6 && worstScore > 8)
+    ),
+  };
+}
+
+function measurePreTiledPreviewArtifactCore(data, width, height) {
+  const halfW = Math.floor(width / 2);
+  const halfH = Math.floor(height / 2);
+  if (halfW < 8 || halfH < 8) {
+    return {
+      score: 0,
+      duplicatePairs: 0,
+      activePairs: 0,
+      bestPairRatio: 1,
+      duplicateRisk: false,
+    };
+  }
+
+  const pairs = [
+    measureRepeatedTilePairCore(data, width, height, halfW, halfH, halfW, 0),
+    measureRepeatedTilePairCore(data, width, height, halfW, halfH, 0, halfH),
+    measureRepeatedTilePairCore(data, width, height, halfW, halfH, halfW, halfH),
+  ];
+  const duplicatePairs = pairs.filter((pair) => pair.duplicate).length;
+  const activePairs = pairs.filter((pair) => pair.activeRatio > 0.2).length;
+  const score = pairs.reduce((sum, pair) => sum + pair.score, 0) / Math.max(1, pairs.length);
+  const worstScore = Math.max(...pairs.map((pair) => pair.score));
+  const bestPairRatio = Math.min(...pairs.map((pair) => pair.mismatchRatio));
+  const averageSimilarity = pairs.reduce((sum, pair) => sum + pair.similarRatio, 0) / Math.max(1, pairs.length);
+
+  return {
+    score,
+    worstScore,
+    duplicatePairs,
+    activePairs,
+    bestPairRatio,
+    averageSimilarity,
+    pairs,
+    duplicateRisk: (
+      duplicatePairs >= 2 &&
+      activePairs >= 2 &&
+      score > 5.8 &&
+      worstScore > 8 &&
+      averageSimilarity > 0.22 &&
+      bestPairRatio < 0.48
+    ),
+  };
+}
+
+function measureRepeatedTilePairCore(data, width, height, tileW, tileH, dx, dy) {
+  const step = Math.max(1, Math.round(Math.min(tileW, tileH) / 90));
+  const margin = Math.max(2, step * 2);
+  let mismatchTotal = 0;
+  let activityTotal = 0;
+  let similarSamples = 0;
+  let activeSamples = 0;
+  let count = 0;
+
+  for (let y = margin; y < tileH - margin; y += step) {
+    for (let x = margin; x < tileW - margin; x += step) {
+      const ax = x;
+      const ay = y;
+      const bx = x + dx;
+      const by = y + dy;
+      if (bx < 1 || bx >= width - 1 || by < 1 || by >= height - 1) continue;
+      const detailA = pixelDetailAt(data, width, height, ax, ay);
+      const detailB = pixelDetailAt(data, width, height, bx, by);
+      const activity = (
+        detailA.gradient * 0.42 +
+        detailA.detail * 0.9 +
+        detailB.gradient * 0.42 +
+        detailB.detail * 0.9
+      ) / 2;
+      const mismatch = pixelDistance(data, width, ax, ay, bx, by);
+
+      mismatchTotal += mismatch;
+      activityTotal += activity;
+      count += 1;
+      if (activity > 5.8) activeSamples += 1;
+      if (activity > 6.4 && mismatch < Math.max(5.2, activity * 0.42)) similarSamples += 1;
+    }
+  }
+
+  const mismatch = mismatchTotal / Math.max(1, count);
+  const activity = activityTotal / Math.max(1, count);
+  const mismatchRatio = mismatch / Math.max(1, activity);
+  const similarRatio = similarSamples / Math.max(1, count);
+  const activeRatio = activeSamples / Math.max(1, count);
+  const score = activeRatio > 0.2
+    ? Math.max(0, activity * 0.56 - mismatch) * (0.65 + Math.min(0.9, similarRatio * 2.4)) + Math.max(0, 0.44 - mismatchRatio) * 9
+    : 0;
+
+  return {
+    mismatch,
+    activity,
+    mismatchRatio,
+    similarRatio,
+    activeRatio,
+    score,
+    duplicate: (
+      activeRatio > 0.2 &&
+      similarRatio > 0.22 &&
+      mismatchRatio < 0.48 &&
+      score > 5.8
     ),
   };
 }
