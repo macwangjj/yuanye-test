@@ -204,6 +204,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - History rows disclose either `竖版直出` or `周期转竖版 2×3`, so visual review can connect each JPG to the export path that produced it.
 - Tests cover direct exports, periodic-grid exports, missing export metadata, and mismatched export-mode/grid combinations.
 
+## 0.7.37 Live Export-Geometry Gate
+
+- Current-task JPG downloads now use the same export-geometry gate as history records.
+- A task can pass only when the seam check includes a valid `aspectWarp.mode`, `aspectWarp.columns`, and `aspectWarp.rows`.
+- This prevents an in-memory task from becoming downloadable if it has a stale or partial aspect-warp result without proof that the final JPG was exported as either direct portrait or a valid periodic grid.
+- Tests cover current direct exports, current periodic-grid exports, missing geometry, and mode/grid mismatches.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

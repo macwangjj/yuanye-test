@@ -12,10 +12,47 @@ test("single-image download is gated by commercial certification", () => {
   assert.match(downloadFunction, /taskHasCertifiedDownload\(task\)/, "downloadJpg must check certification before creating a download link");
   assert.match(certificationFunction, /seamCheck\?\.printSpec\?\.passed === true/, "single-image certification must require print spec verification");
   assert.match(certificationFunction, /seamCheck\?\.aspectWarp\?\.passed === true/, "single-image certification must reject aspect-warped exports");
+  assert.match(certificationFunction, /hasValidExportGeometry\(aspectWarp\.mode, aspectWarp\.columns, aspectWarp\.rows\)/, "single-image certification must require export geometry metadata");
   assert.ok(
     downloadFunction.indexOf("taskHasCertifiedDownload(task)") < downloadFunction.indexOf("document.createElement(\"a\")"),
     "certification guard must run before the browser download link is created",
   );
+});
+
+test("current task certification rejects missing or mismatched export geometry", () => {
+  const taskHasCertifiedDownload = compileFunction(appSource, "taskHasCertifiedDownload", ["hasValidExportGeometry"]);
+  const certifiedTask = {
+    resultJpgUrl: "/current.jpg",
+    qualityPassed: true,
+    seamCheck: {
+      passed: true,
+      printSpec: { passed: true },
+      aspectWarp: { passed: true, mode: "direct-stretch", columns: 1, rows: 1 },
+    },
+  };
+
+  assert.equal(taskHasCertifiedDownload(certifiedTask), true, "direct portrait tasks with complete export geometry should be downloadable");
+  assert.equal(taskHasCertifiedDownload({
+    ...certifiedTask,
+    seamCheck: {
+      ...certifiedTask.seamCheck,
+      aspectWarp: { passed: true, mode: "periodic-grid", columns: 2, rows: 3 },
+    },
+  }), true, "periodic-grid rectified tasks with complete export geometry should be downloadable");
+  assert.equal(taskHasCertifiedDownload({
+    ...certifiedTask,
+    seamCheck: {
+      ...certifiedTask.seamCheck,
+      aspectWarp: { passed: true },
+    },
+  }), false, "tasks missing export geometry should not be downloadable");
+  assert.equal(taskHasCertifiedDownload({
+    ...certifiedTask,
+    seamCheck: {
+      ...certifiedTask.seamCheck,
+      aspectWarp: { passed: true, mode: "direct-stretch", columns: 2, rows: 3 },
+    },
+  }), false, "direct exports with periodic grid dimensions should not be downloadable");
 });
 
 test("history and batch downloads only include certified records", () => {
@@ -33,9 +70,10 @@ test("history and batch downloads only include certified records", () => {
   assert.match(downloadGroupFunction, /filter\(recordHasCertifiedDownload\)/, "history group download should filter to certified records");
   assert.match(recordCertificationFunction, /actual\.printSpecPassed === true/, "history certification must require saved print spec verification");
   assert.match(recordCertificationFunction, /actual\.aspectWarpPassed === true/, "history certification must require saved aspect-warp verification");
-  assert.match(recordCertificationFunction, /actual\.exportMode === "direct-stretch" \|\| actual\.exportMode === "periodic-grid"/, "history certification must require a saved export mode");
-  assert.match(recordCertificationFunction, /Number\.isInteger\(actual\.tileColumns\)/, "history certification must require saved export grid columns");
-  assert.match(recordCertificationFunction, /Number\.isInteger\(actual\.tileRows\)/, "history certification must require saved export grid rows");
+  assert.match(recordCertificationFunction, /hasValidExportGeometry\(actual\.exportMode, actual\.tileColumns, actual\.tileRows\)/, "history certification must require export geometry metadata");
+  assert.match(appSource, /exportMode === "direct-stretch" \|\| exportMode === "periodic-grid"/, "export geometry must require a known export mode");
+  assert.match(appSource, /Number\.isInteger\(tileColumns\)/, "export geometry must require saved export grid columns");
+  assert.match(appSource, /Number\.isInteger\(tileRows\)/, "export geometry must require saved export grid rows");
   assert.match(recordCertificationFunction, /certification\.certified === true/, "history certification must require an explicit certified handoff flag");
   assert.match(recordCertificationFunction, /gate\.fourWayRepeat === true/, "history certification must require saved four-way-repeat approval");
   assert.match(recordCertificationFunction, /gate\.qualityPassed === true/, "history certification must require saved quality approval");
@@ -54,7 +92,7 @@ test("history and batch downloads only include certified records", () => {
 });
 
 test("history certification rejects stale or partial metadata", () => {
-  const recordHasCertifiedDownload = compileFunction(appSource, "recordHasCertifiedDownload");
+  const recordHasCertifiedDownload = compileFunction(appSource, "recordHasCertifiedDownload", ["hasValidExportGeometry"]);
   const historyExportModeText = compileFunction(appSource, "historyExportModeText");
   const certifiedRecord = {
     imageUrl: "/history/current.jpg",
@@ -161,6 +199,7 @@ function extractFunction(source, name) {
   throw new Error(`Unable to extract ${name}`);
 }
 
-function compileFunction(source, name) {
-  return Function(`"use strict"; return (${extractFunction(source, name)});`)();
+function compileFunction(source, name, dependencies = []) {
+  const dependencySource = dependencies.map((dependency) => extractFunction(source, dependency)).join("\n");
+  return Function(`"use strict"; ${dependencySource}\nreturn (${extractFunction(source, name)});`)();
 }

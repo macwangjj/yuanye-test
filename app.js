@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.36-test";
+const clientVersion = "0.7.37-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -477,13 +477,25 @@ function markTaskDownloaded(task) {
   task.nodes.download.classList.add("is-downloaded");
 }
 
+function hasValidExportGeometry(exportMode, tileColumns, tileRows) {
+  const validExportMode = exportMode === "direct-stretch" || exportMode === "periodic-grid";
+  const validTileGrid = Number.isInteger(tileColumns) && tileColumns >= 1 &&
+    Number.isInteger(tileRows) && tileRows >= 1;
+  const exportGridMatchesMode = exportMode === "periodic-grid"
+    ? tileColumns * tileRows > 1
+    : tileColumns === 1 && tileRows === 1;
+  return validExportMode && validTileGrid && exportGridMatchesMode;
+}
+
 function taskHasCertifiedDownload(task) {
+  const aspectWarp = task?.seamCheck?.aspectWarp || {};
   return Boolean(
     task?.resultJpgUrl &&
     task?.qualityPassed === true &&
     task?.seamCheck?.passed === true &&
     task?.seamCheck?.printSpec?.passed === true &&
-    task?.seamCheck?.aspectWarp?.passed === true
+    task?.seamCheck?.aspectWarp?.passed === true &&
+    hasValidExportGeometry(aspectWarp.mode, aspectWarp.columns, aspectWarp.rows)
   );
 }
 
@@ -491,21 +503,13 @@ function recordHasCertifiedDownload(record) {
   const certification = record?.certification || {};
   const actual = certification.actual || {};
   const gate = certification.gate || {};
-  const validExportMode = actual.exportMode === "direct-stretch" || actual.exportMode === "periodic-grid";
-  const validTileGrid = Number.isInteger(actual.tileColumns) && actual.tileColumns >= 1 &&
-    Number.isInteger(actual.tileRows) && actual.tileRows >= 1;
-  const exportGridMatchesMode = actual.exportMode === "periodic-grid"
-    ? actual.tileColumns * actual.tileRows > 1
-    : actual.tileColumns === 1 && actual.tileRows === 1;
   return Boolean(
     record?.imageUrl &&
     record?.qualityPassed === true &&
     certification.certified === true &&
     actual.printSpecPassed === true &&
     actual.aspectWarpPassed === true &&
-    validExportMode &&
-    validTileGrid &&
-    exportGridMatchesMode &&
+    hasValidExportGeometry(actual.exportMode, actual.tileColumns, actual.tileRows) &&
     gate.fourWayRepeat === true &&
     gate.qualityPassed === true &&
     typeof gate.seamDetailLossScore === "number" &&
