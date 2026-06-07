@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.45-test";
+const clientVersion = "0.7.46-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -4646,8 +4646,26 @@ function forcePeriodicSeams(ctx, width, height, check = null) {
   lockOppositeBands(data, width, height, band, "vertical");
   restoreEdgeMicroTexture(data, width, height, band, "horizontal");
   restoreEdgeMicroTexture(data, width, height, band, "vertical");
+  if (shouldStabilizePeriodicCorners(check)) {
+    const cornerBand = Math.max(16, Math.min(96, Math.round(Math.min(width, height) * 0.018)));
+    stabilizePeriodicCorners(data, width, height, cornerBand);
+  }
   smoothInternalGuideLines(data, width, height, check);
   ctx.putImageData(imageData, 0, 0);
+}
+
+function shouldStabilizePeriodicCorners(check = null) {
+  if (!check) return true;
+  const issueText = [
+    check.finalIssueType,
+    ...(Array.isArray(check.issues) ? check.issues : []),
+  ].filter(Boolean).join(" ");
+  return (
+    /回头没接|四角平铺交汇|横档|竖档|最终JPG边缘硬线|平铺预览中心线|平铺边带|接缝过渡/.test(issueText) ||
+    (check.cornerScore || 0) > 7.5 ||
+    (check.tiledCorner?.worstScore || 0) > 12 ||
+    ((check.horizontalScore || 0) > 7.4 && (check.verticalScore || 0) > 7.4)
+  );
 }
 
 function lockOppositeBands(data, width, height, band, direction) {
@@ -4678,6 +4696,59 @@ function lockOppositeBands(data, width, height, band, direction) {
       }
     }
   }
+}
+
+function stabilizePeriodicCorners(data, width, height, band) {
+  const source = new Uint8ClampedArray(data);
+  const size = Math.min(width, height);
+  const safeBand = Math.max(8, Math.min(Math.round(size * 0.08), band));
+  const innerOffset = Math.max(safeBand * 2, Math.round(size * 0.055));
+
+  for (let y = 0; y < safeBand; y += 1) {
+    for (let x = 0; x < safeBand; x += 1) {
+      const radial = Math.hypot(x, y) / Math.max(1, safeBand);
+      const feather = Math.max(0, 1 - radial);
+      if (feather <= 0) continue;
+
+      const weight = Math.pow(feather, 1.45) * 0.74;
+      const points = [
+        [x, y],
+        [width - 1 - x, y],
+        [x, height - 1 - y],
+        [width - 1 - x, height - 1 - y],
+      ];
+      const innerPoints = [
+        [Math.min(width - 1, x + innerOffset), Math.min(height - 1, y + innerOffset)],
+        [Math.max(0, width - 1 - x - innerOffset), Math.min(height - 1, y + innerOffset)],
+        [Math.min(width - 1, x + innerOffset), Math.max(0, height - 1 - y - innerOffset)],
+        [Math.max(0, width - 1 - x - innerOffset), Math.max(0, height - 1 - y - innerOffset)],
+      ];
+      const indices = points.map(([px, py]) => (py * width + px) * 4);
+      const innerIndices = innerPoints.map(([px, py]) => (py * width + px) * 4);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const cornerAverage = indices.reduce((sum, index) => sum + source[index + channel], 0) / indices.length;
+        const innerAverage = innerIndices.reduce((sum, index) => sum + source[index + channel], 0) / innerIndices.length;
+        const detail = innerIndices.reduce((sum, index) => sum + localDetailAt(source, width, height, index, channel), 0) / innerIndices.length;
+        const target = cornerAverage * 0.64 + innerAverage * 0.36 + detail * 0.32;
+
+        for (const index of indices) {
+          data[index + channel] = Math.round(data[index + channel] * (1 - weight) + target * weight);
+        }
+      }
+    }
+  }
+}
+
+function localDetailAt(source, width, height, index, channel) {
+  const pixel = Math.floor(index / 4);
+  const x = pixel % width;
+  const y = Math.floor(pixel / width);
+  const left = (y * width + Math.max(0, x - 1)) * 4 + channel;
+  const right = (y * width + Math.min(width - 1, x + 1)) * 4 + channel;
+  const top = (Math.max(0, y - 1) * width + x) * 4 + channel;
+  const bottom = (Math.min(height - 1, y + 1) * width + x) * 4 + channel;
+  return source[index + channel] - (source[left] + source[right] + source[top] + source[bottom]) / 4;
 }
 
 function restoreEdgeMicroTexture(data, width, height, band, direction) {

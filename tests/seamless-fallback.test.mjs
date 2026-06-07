@@ -99,6 +99,29 @@ test("generation tries strict certified fallback before automatic regeneration",
   assert.ok(fallbackIndex < regenerationIndex, "fallback candidate must run before the next regeneration attempt");
 });
 
+test("forced periodic repair stabilizes four-corner junctions", () => {
+  const forcePeriodicSource = extractFunction(appSource, "forcePeriodicSeams");
+  const shouldStabilizePeriodicCorners = compileFunction(appSource, "shouldStabilizePeriodicCorners");
+
+  assert.match(forcePeriodicSource, /shouldStabilizePeriodicCorners\(check\)/, "force-periodic repair should gate a corner pass from the current check");
+  assert.match(forcePeriodicSource, /stabilizePeriodicCorners\(data, width, height, cornerBand\)/, "force-periodic repair should run the production corner stabilizer");
+  assert.equal(shouldStabilizePeriodicCorners({
+    passed: false,
+    finalIssueType: "四角平铺交汇明显，可修复",
+    issues: ["四角平铺交汇明显，可修复"],
+    tiledCorner: { worstScore: 24 },
+  }), true, "corner-junction failures should get the corner stabilizer");
+  assert.equal(shouldStabilizePeriodicCorners({
+    passed: false,
+    finalIssueType: "花型信息量不足，不可修复",
+    issues: ["花型信息量不足，不可修复"],
+    cornerScore: 2,
+    horizontalScore: 2,
+    verticalScore: 2,
+    tiledCorner: { worstScore: 4 },
+  }), false, "non-corner composition failures should not route through corner stabilization");
+});
+
 function compileFunction(source, name) {
   return Function(`"use strict"; return (${extractFunction(source, name)});`)();
 }

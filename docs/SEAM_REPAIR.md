@@ -274,6 +274,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Normal generation and fission generation both receive these attempt strategies, while the same commercial seam and print certification gates remain unchanged.
 - Tests cover attempt guidance, normal/fission prompt wiring, and the generation loop passing the attempt number into prompt construction.
 
+## 0.7.46 Four-Corner Stabilization
+
+- Forced periodic repair now applies a dedicated corner-stabilization pass after opposite bands are locked and micro-texture is restored.
+- The pass blends the four corresponding corner patches toward one shared periodic corner while borrowing interior detail, reducing hard dots, corner knots, and 2x2 junction spots without accepting the candidate blindly.
+- The discardable strict-seamless candidate still replaces the task image only after the full commercial seam, clarity, print-spec, and download-certification gates pass.
+- Tests cover synthetic hard corner spots, verify the corner score drops after stabilization, and confirm the production force-periodic path calls the corner pass.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
