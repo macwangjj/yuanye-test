@@ -826,6 +826,17 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
         break;
       }
 
+      if (shouldPrintClarityEnhance(lastCheck)) {
+        phase = "印花清晰度增强";
+        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在做印花清晰度增强。`, 92);
+        const clarityCheck = await finishPrintClarityTask(task, { quiet: true });
+        lastCheck = clarityCheck || lastCheck;
+        if (lastCheck.passed) {
+          finalAction = "enhance";
+          break;
+        }
+      }
+
       if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiOffsetRepair(lastCheck)) {
         phase = "AI 丝滑过渡修缝";
         setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在让 AI 生成丝滑过渡。`, 94);
@@ -1024,6 +1035,38 @@ async function enhanceTask(task) {
   }
 }
 
+async function finishPrintClarityTask(task, options = {}) {
+  const sourceUrl = task.resultDataUrl || task.resultJpgUrl;
+  if (!sourceUrl) return null;
+
+  task.nodes.enhance.disabled = true;
+  if (!options.quiet) {
+    setTaskStatus(task, "生成中", "正在做印花清晰度增强并复检四方循环。", 88);
+  }
+
+  try {
+    task.resultJpgUrl = await makeJpg(sourceUrl, {
+      enhance: true,
+      strength: Math.max(getEnhanceStrength(), 0.34),
+    });
+    task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+    const check = await runSeamCheck(task, true);
+    task.repairCheck = check;
+    task.qualityPassed = check.passed;
+    task.nodes.select.disabled = !check.passed;
+    task.nodes.select.checked = check.passed;
+    toggleTaskSelection(task);
+    if (!options.quiet) {
+      setTaskStatus(task, check.passed ? "已完成" : "需人工复核", check.passed
+        ? `清晰度增强完成，${task.seamRating}，可以下载 JPG。`
+        : `清晰度增强后仍未通过，${seamFailureMessage(check)}，建议继续修缝或重生。`, 100);
+    }
+    return check;
+  } finally {
+    task.nodes.enhance.disabled = false;
+  }
+}
+
 async function repairTask(task, options = {}) {
   if (!task.resultJpgUrl) {
     if (!options.quiet) showToast("请先生成图片");
@@ -1121,15 +1164,16 @@ async function aiOffsetRepairTask(task, previousCheck) {
   task.aiRepairAttempts += 1;
   task.repairAttempts += 1;
 
-  const offsetDataUrl = await makeOffsetDataUrl(task.resultJpgUrl);
+  const repairSourceUrl = task.resultDataUrl || task.resultJpgUrl;
+  const offsetDataUrl = await makeOffsetDataUrl(repairSourceUrl, { format: "png" });
   const maskDataUrl = await makeOffsetRepairMaskDataUrl(offsetDataUrl);
   const payload = await fetchJsonWithRetry("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       image: {
-        name: `${task.patternCode || "YUANYE"}-offset-seam-repair.jpg`,
-        type: "image/jpeg",
+        name: `${task.patternCode || "YUANYE"}-offset-seam-repair.png`,
+        type: "image/png",
         dataUrl: offsetDataUrl,
       },
       mask: {
@@ -1145,10 +1189,11 @@ async function aiOffsetRepairTask(task, previousCheck) {
     timeoutMs: generateTimeoutMs,
   });
 
-  const restoredDataUrl = await makeOffsetDataUrl(payload.image.dataUrl, { reverse: true });
+  const restoredDataUrl = await makeOffsetDataUrl(payload.image.dataUrl, { reverse: true, format: "png" });
   task.resultDataUrl = restoredDataUrl;
   task.resultJpgUrl = await makeJpg(restoredDataUrl, {
-    enhance: false,
+    enhance: shouldPrintClarityEnhance(previousCheck),
+    strength: Math.max(getEnhanceStrength(), 0.3),
     skipAiRepair: true,
     repair: false,
   });
@@ -1357,6 +1402,10 @@ function shouldForcePeriodicRepair(check) {
   );
 }
 
+function shouldPrintClarityEnhance(check) {
+  return Boolean(check?.issues?.some((issue) => issue.includes("清晰度不足")));
+}
+
 async function runSeamCheck(task, quiet = false) {
   if (!task.resultJpgUrl) {
     if (!quiet) showToast("请先生成图片");
@@ -1418,6 +1467,7 @@ function seamCheckSummary(check) {
     `角点 ${check.cornerScore.toFixed(2)}`,
     `边带 ${Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0).toFixed(2)}`,
     `平铺 ${Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0).toFixed(2)}`,
+    `清晰 ${Number(check.clarity?.detailScore || 0).toFixed(2)}`,
     check.repairability === "repairable" ? "可轻修" : check.repairability === "unrepairable" ? "需重生/复核" : "通过",
   ].join(" · ");
   return check.passed
@@ -1450,8 +1500,9 @@ function makeJpg(dataUrl, options = {}) {
         if (options.repair !== false) {
           repairSeams(ctx, canvas.width, canvas.height, options.repairOptions || {});
         }
-        if (options.enhance) {
-          enhanceClarity(ctx, canvas.width, canvas.height, options.strength || getEnhanceStrength());
+        const clarityStrength = printClarityStrength(image, canvas.width, canvas.height, options);
+        if (clarityStrength > 0) {
+          enhanceClarity(ctx, canvas.width, canvas.height, clarityStrength);
         }
         if (options.repair !== false) {
           const precheck = measureSeamQuality(ctx, canvas.width, canvas.height);
@@ -1488,6 +1539,7 @@ function makeOffsetRepairJpg(dataUrl, check) {
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         offsetRepairSeams(ctx, canvas.width, canvas.height, check);
+        enhanceClarity(ctx, canvas.width, canvas.height, 0.12);
         const jpg = canvas.toDataURL("image/jpeg", 0.94);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出 Offset 修复 JPG。");
         resolve(withJpegDpi(jpg, 300));
@@ -1519,6 +1571,7 @@ function makeEdgeBlendRepairJpg(dataUrl, check) {
           maxDiff: 126,
           textureMix: 0.74,
         });
+        enhanceClarity(ctx, canvas.width, canvas.height, 0.12);
         const jpg = canvas.toDataURL("image/jpeg", 0.94);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出边缘融合 JPG。");
         resolve(withJpegDpi(jpg, 300));
@@ -1546,6 +1599,7 @@ function makeStrictSeamlessJpg(dataUrl, check) {
         if (!secondCheck.passed && shouldForcePeriodicRepair(secondCheck)) {
           forcePeriodicSeams(ctx, canvas.width, canvas.height, secondCheck);
         }
+        enhanceClarity(ctx, canvas.width, canvas.height, 0.14);
         const jpg = canvas.toDataURL("image/jpeg", 0.94);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出强制四方连续 JPG。");
         resolve(withJpegDpi(jpg, 300));
@@ -1568,7 +1622,13 @@ function makeOffsetDataUrl(dataUrl, options = {}) {
         canvas.height = image.height;
         const ctx = canvas.getContext("2d");
         drawOffsetImage(ctx, image, canvas.width, canvas.height, options);
-        const jpg = canvas.toDataURL("image/jpeg", 0.94);
+        if (options.format === "png") {
+          const png = canvas.toDataURL("image/png");
+          if (!png || png === "data:,") throw new Error("浏览器无法导出 Offset PNG。");
+          resolve(png);
+          return;
+        }
+        const jpg = canvas.toDataURL("image/jpeg", 0.95);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出 Offset 图片。");
         resolve(withJpegDpi(jpg, 300));
       } catch (error) {
@@ -1759,6 +1819,19 @@ function enhanceClarity(ctx, width, height, amount) {
   ctx.putImageData(imageData, 0, 0);
 }
 
+function printClarityStrength(image, targetWidth, targetHeight, options = {}) {
+  const upscale = Math.max(targetWidth / Math.max(1, image.width), targetHeight / Math.max(1, image.height));
+  const base = options.printFinish === false
+    ? 0
+    : upscale >= 4
+      ? 0.26
+      : upscale >= 2
+        ? 0.2
+        : 0.08;
+  const requested = options.enhance ? (options.strength || getEnhanceStrength()) : 0;
+  return Math.min(0.52, Math.max(base, requested));
+}
+
 function drawTileToTarget(ctx, image, targetWidth, targetHeight) {
   ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
 }
@@ -1842,6 +1915,7 @@ function measureSeamQuality(ctx, width, height) {
   const bandVertical = measureEdgeBandArtifact(data, width, height, "vertical");
   const tiledHorizontal = measureTiledPreviewSeam(data, width, height, "horizontal");
   const tiledVertical = measureTiledPreviewSeam(data, width, height, "vertical");
+  const clarity = measurePrintClarity(data, width, height);
   const peakLimitH = Math.max(18, Math.round((band * samplesX) * 0.12));
   const peakLimitV = Math.max(18, Math.round((band * samplesY) * 0.12));
   const peakRatioH = horizontalPeaks / Math.max(1, band * samplesX);
@@ -1875,6 +1949,7 @@ function measureSeamQuality(ctx, width, height) {
   if (transitionRisk && !overlayRisk && !severeHorizontal && !severeVertical) issues.push("接缝过渡不自然，不可修复");
   if (!issues.length && tiledPreviewRisk) issues.push("平铺预览中心线明显，可修复");
   if (!issues.length && bandArtifactRisk) issues.push("平铺边带明显，可修复");
+  if (!issues.length && clarity.blurRisk) issues.push("成品清晰度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
 
@@ -1893,7 +1968,8 @@ function measureSeamQuality(ctx, width, height) {
     maxBandScore <= 8.5 &&
     maxBandWorst <= 16 &&
     maxTiledScore <= 7.4 &&
-    maxTiledWorst <= 15
+    maxTiledWorst <= 15 &&
+    !clarity.blurRisk
   );
   if (!passed && repairability === "pass") {
     repairability = "unrepairable";
@@ -1919,6 +1995,7 @@ function measureSeamQuality(ctx, width, height) {
     bandVertical,
     tiledHorizontal,
     tiledVertical,
+    clarity,
     repairability: passed ? "pass" : repairability,
     finalIssueType,
     issues,
@@ -2397,6 +2474,57 @@ function previewPixelDistance(data, width, alongA, crossA, alongB, crossB, horiz
   const x2 = horizontal ? alongB : normalizedB;
   const y2 = horizontal ? normalizedB : alongB;
   return pixelDistance(data, width, x1, y1, x2, y2);
+}
+
+function measurePrintClarity(data, width, height) {
+  const step = Math.max(1, Math.round(Math.max(width, height) / 260));
+  let gradientTotal = 0;
+  let detailTotal = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let count = 0;
+
+  for (let y = step; y < height - step; y += step) {
+    for (let x = step; x < width - step; x += step) {
+      const center = pixelLuminance(data, width, x, y);
+      const left = pixelLuminance(data, width, x - step, y);
+      const right = pixelLuminance(data, width, x + step, y);
+      const top = pixelLuminance(data, width, x, y - step);
+      const bottom = pixelLuminance(data, width, x, y + step);
+      const gradient = (Math.abs(right - left) + Math.abs(bottom - top)) / 2;
+      const detail = Math.abs(center * 4 - left - right - top - bottom) / 4;
+
+      gradientTotal += gradient;
+      detailTotal += detail;
+      lumTotal += center;
+      lumSquareTotal += center * center;
+      count += 1;
+    }
+  }
+
+  const gradientScore = gradientTotal / Math.max(1, count);
+  const detailScore = detailTotal / Math.max(1, count);
+  const mean = lumTotal / Math.max(1, count);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - mean * mean));
+  const detailRatio = detailScore / Math.max(1, gradientScore);
+  const riskScore = Math.max(0, 3.2 - detailScore) + Math.max(0, 0.18 - detailRatio) * 18 + Math.max(0, gradientScore - detailScore * 2.6) * 0.18;
+  const softBlurRisk = contrastScore > 10 && gradientScore > 6 && detailScore < 2.2 && detailRatio < 0.26;
+  const blurRisk = (contrastScore > 13 && gradientScore > 4.2 && riskScore > 2.6) || softBlurRisk;
+
+  return {
+    detailScore,
+    gradientScore,
+    contrastScore,
+    detailRatio,
+    riskScore,
+    softBlurRisk,
+    blurRisk,
+  };
+}
+
+function pixelLuminance(data, width, x, y) {
+  const index = (Math.round(y) * width + Math.round(x)) * 4;
+  return pixelLuminanceAt(data, index);
 }
 
 function edgeActivity(data, width, x1, y1, x2, y2) {

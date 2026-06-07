@@ -53,6 +53,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - AI offset repair, local edge blending, and forced periodic repair now consider this tiled-preview score when deciding whether a result is repairable.
 - Tests include both a genuinely periodic texture that must pass and a matching-edge hard line that must fail.
 
+## 0.7.17 Print-Clarity Changes
+
+- Final JPG export now applies a conservative print-finishing clarity pass by default, especially when a 1024/1536 generation is enlarged to the `4961 x 7559 px` print canvas.
+- The quality gate now reports a `清晰` score and can reject high-contrast but blurred output as `成品清晰度不足，可增强`.
+- If clarity is the first failing issue, the generation pipeline runs a print-clarity enhancement and rechecks seams before allowing download.
+- AI Offset repair now uses the native generated image when available and sends PNG offset/mask assets, reducing repeated JPEG compression before the final print export.
+- Local edge repair and forced periodic repair add a small detail-restoration pass after seam blending so repaired seams do not look overly soft.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

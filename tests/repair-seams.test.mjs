@@ -89,6 +89,19 @@ test("tiled preview seam check rejects a matching hard line that appears only af
   assert.ok(tiled.worstScore > 16, `expected a visible tiled seam score; got ${tiled.worstScore}`);
 });
 
+test("print clarity check allows sharp printable texture and rejects blurred output", () => {
+  const width = 160;
+  const height = 160;
+  const sharp = makeSharpPrintPattern(width, height);
+  const blurred = boxBlur(sharp, width, height, 3);
+  const sharpClarity = measurePrintClarityCore(sharp, width, height);
+  const blurredClarity = measurePrintClarityCore(blurred, width, height);
+
+  assert.equal(sharpClarity.blurRisk, false, `sharp texture should pass; got ${JSON.stringify(sharpClarity)}`);
+  assert.equal(blurredClarity.blurRisk, true, `blurred texture should be rejected; got ${JSON.stringify(blurredClarity)}`);
+  assert.ok(sharpClarity.detailScore > blurredClarity.detailScore * 1.8, `sharp detail should be much higher; sharp=${sharpClarity.detailScore} blurred=${blurredClarity.detailScore}`);
+});
+
 function makeSyntheticPattern(width, height) {
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y += 1) {
@@ -108,6 +121,51 @@ function makeSyntheticPattern(width, height) {
   paintBand(data, width, height, "left", [238, 214, 42]);
   paintBand(data, width, height, "right", [56, 42, 190]);
   return data;
+}
+
+function makeSharpPrintPattern(width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const woven = ((x % 8) < 4 ? 36 : -36) + ((y % 10) < 5 ? 28 : -28);
+      const line = ((x + y) % 19 === 0 || (x * 2 - y) % 23 === 0) ? 96 : 0;
+      data[i] = clamp(128 + woven + line + Math.sin(y * 0.17) * 12);
+      data[i + 1] = clamp(112 + woven * 0.85 + line * 0.74 + Math.cos(x * 0.11) * 10);
+      data[i + 2] = clamp(94 + woven * 0.62 + line * 0.52);
+      data[i + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function boxBlur(source, width, height, radius) {
+  const output = new Uint8ClampedArray(source.length);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const out = (y * width + x) * 4;
+      let count = 0;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          const sx = Math.max(0, Math.min(width - 1, x + dx));
+          const sy = Math.max(0, Math.min(height - 1, y + dy));
+          const i = (sy * width + sx) * 4;
+          r += source[i];
+          g += source[i + 1];
+          b += source[i + 2];
+          count += 1;
+        }
+      }
+      output[out] = Math.round(r / count);
+      output[out + 1] = Math.round(g / count);
+      output[out + 2] = Math.round(b / count);
+      output[out + 3] = 255;
+    }
+  }
+  return output;
 }
 
 function makePeriodicPattern(width, height) {
@@ -374,6 +432,57 @@ function previewPixelDistance(data, width, alongA, crossA, alongB, crossB, horiz
   const x2 = horizontal ? alongB : normalizedB;
   const y2 = horizontal ? normalizedB : alongB;
   return pixelDistance(data, width, x1, y1, x2, y2);
+}
+
+function measurePrintClarityCore(data, width, height) {
+  const step = Math.max(1, Math.round(Math.max(width, height) / 260));
+  let gradientTotal = 0;
+  let detailTotal = 0;
+  let lumTotal = 0;
+  let lumSquareTotal = 0;
+  let count = 0;
+
+  for (let y = step; y < height - step; y += step) {
+    for (let x = step; x < width - step; x += step) {
+      const center = pixelLuminance(data, width, x, y);
+      const left = pixelLuminance(data, width, x - step, y);
+      const right = pixelLuminance(data, width, x + step, y);
+      const top = pixelLuminance(data, width, x, y - step);
+      const bottom = pixelLuminance(data, width, x, y + step);
+      const gradient = (Math.abs(right - left) + Math.abs(bottom - top)) / 2;
+      const detail = Math.abs(center * 4 - left - right - top - bottom) / 4;
+
+      gradientTotal += gradient;
+      detailTotal += detail;
+      lumTotal += center;
+      lumSquareTotal += center * center;
+      count += 1;
+    }
+  }
+
+  const gradientScore = gradientTotal / Math.max(1, count);
+  const detailScore = detailTotal / Math.max(1, count);
+  const mean = lumTotal / Math.max(1, count);
+  const contrastScore = Math.sqrt(Math.max(0, lumSquareTotal / Math.max(1, count) - mean * mean));
+  const detailRatio = detailScore / Math.max(1, gradientScore);
+  const riskScore = Math.max(0, 3.2 - detailScore) + Math.max(0, 0.18 - detailRatio) * 18 + Math.max(0, gradientScore - detailScore * 2.6) * 0.18;
+  const softBlurRisk = contrastScore > 10 && gradientScore > 6 && detailScore < 2.2 && detailRatio < 0.26;
+  const blurRisk = (contrastScore > 13 && gradientScore > 4.2 && riskScore > 2.6) || softBlurRisk;
+
+  return {
+    detailScore,
+    gradientScore,
+    contrastScore,
+    detailRatio,
+    riskScore,
+    softBlurRisk,
+    blurRisk,
+  };
+}
+
+function pixelLuminance(data, width, x, y) {
+  const index = (Math.round(y) * width + Math.round(x)) * 4;
+  return data[index] * 0.2126 + data[index + 1] * 0.7152 + data[index + 2] * 0.0722;
 }
 
 function wrapIndex(value, size) {
