@@ -203,6 +203,19 @@ test("print compression artifact check rejects blocky macro artifacts", () => {
   assert.ok(blockyCheck.blockScore > cleanCheck.blockScore * 4, `block artifact score should be much higher; clean=${cleanCheck.blockScore} blocky=${blockyCheck.blockScore}`);
 });
 
+test("print sharpen halo check rejects bright or dark edge ringing", () => {
+  const width = 180;
+  const height = 180;
+  const clean = makeSmoothPrintPattern(width, height);
+  const haloed = makeSharpenHaloPattern(width, height);
+  const cleanCheck = measureSharpenHaloArtifactCore(clean, width, height);
+  const haloCheck = measureSharpenHaloArtifactCore(haloed, width, height);
+
+  assert.equal(cleanCheck.haloRisk, false, `clean printable texture should not be rejected for edge halos; got ${JSON.stringify(cleanCheck)}`);
+  assert.equal(haloCheck.haloRisk, true, `visible sharpen halos should be rejected; got ${JSON.stringify(haloCheck)}`);
+  assert.ok(haloCheck.haloRatio > cleanCheck.haloRatio + 0.03, `halo artifact ratio should be much higher; clean=${cleanCheck.haloRatio} halo=${haloCheck.haloRatio}`);
+});
+
 test("print richness check rejects nearly empty low-information output", () => {
   const width = 160;
   const height = 160;
@@ -451,6 +464,31 @@ function makeBlockyCompressionPattern(width, height, block) {
   }
 
   return output;
+}
+
+function makeSharpenHaloPattern(width, height) {
+  const data = makeSmoothPrintPattern(width, height);
+
+  for (let y = 2; y < height - 2; y += 1) {
+    for (let x = 2; x < width - 2; x += 1) {
+      const diagonal = (x + y) % 28;
+      const secondDiagonal = (x * 2 - y + width) % 37;
+      const distance = Math.min(diagonal, 28 - diagonal, secondDiagonal, 37 - secondDiagonal);
+      const index = (y * width + x) * 4;
+
+      if (distance === 0) {
+        data[index] = 34;
+        data[index + 1] = 28;
+        data[index + 2] = 22;
+      } else if (distance <= 1) {
+        data[index] = 238;
+        data[index + 1] = 228;
+        data[index + 2] = 204;
+      }
+    }
+  }
+
+  return data;
 }
 
 function downsampleNearest(source, width, height, targetWidth, targetHeight) {
@@ -1637,6 +1675,83 @@ function measureCompressionArtifactCore(data, width, height) {
   return {
     ...best,
     compressionRisk,
+  };
+}
+
+function measureSharpenHaloArtifactCore(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 420));
+  const rowStep = Math.max(sampleStep * 3, Math.round(height / 120));
+  const colStep = Math.max(sampleStep * 3, Math.round(width / 120));
+  let haloSamples = 0;
+  let severeSamples = 0;
+  let count = 0;
+  let scoreTotal = 0;
+  let contrastTotal = 0;
+
+  function scanLine(length, luminanceAt) {
+    for (let position = sampleStep * 2; position < length - sampleStep * 2; position += sampleStep) {
+      const a = luminanceAt(position - sampleStep * 2);
+      const b = luminanceAt(position - sampleStep);
+      const c = luminanceAt(position);
+      const d = luminanceAt(position + sampleStep);
+      const e = luminanceAt(position + sampleStep * 2);
+      const outer = (a + e) / 2;
+      const ring = (b + d) / 2;
+      const darkCore = c < outer - 18 && b > Math.max(a, c) + 8 && d > Math.max(e, c) + 8;
+      const lightCore = c > outer + 18 && b < Math.min(a, c) - 8 && d < Math.min(e, c) - 8;
+      let localHalo = 0;
+
+      if (darkCore) {
+        localHalo = Math.min(b - Math.max(a, c), d - Math.max(e, c), outer - c) +
+          Math.max(0, ring - outer) * 0.7;
+      }
+      if (lightCore) {
+        localHalo = Math.min(Math.min(a, c) - b, Math.min(e, c) - d, c - outer) +
+          Math.max(0, outer - ring) * 0.7;
+      }
+
+      const edgeContrast = Math.max(Math.abs(b - c), Math.abs(d - c), Math.abs(a - b), Math.abs(e - d));
+      if (localHalo > 6 && edgeContrast > 24) {
+        haloSamples += 1;
+        scoreTotal += localHalo;
+        contrastTotal += edgeContrast;
+        if (localHalo > 13 && edgeContrast > 40) severeSamples += 1;
+      }
+      count += 1;
+    }
+  }
+
+  for (let y = sampleStep * 2; y < height - sampleStep * 2; y += rowStep) {
+    scanLine(width, (x) => pixelLuminance(data, width, x, y));
+  }
+  for (let x = sampleStep * 2; x < width - sampleStep * 2; x += colStep) {
+    scanLine(height, (y) => pixelLuminance(data, width, x, y));
+  }
+
+  const haloRatio = haloSamples / Math.max(1, count);
+  const severeRatio = severeSamples / Math.max(1, count);
+  const averageHalo = scoreTotal / Math.max(1, haloSamples);
+  const averageContrast = contrastTotal / Math.max(1, haloSamples);
+  const densityWeight = Math.min(1, haloRatio / 0.02);
+  const haloScore = haloRatio * 120 +
+    severeRatio * 180 +
+    Math.max(0, averageHalo - 8) * 0.18 * densityWeight +
+    Math.max(0, averageContrast - 36) * 0.035 * densityWeight;
+  const haloRisk = haloScore > 5.2 &&
+    haloRatio > 0.018 &&
+    averageHalo > 8.2 &&
+    averageContrast > 30;
+
+  return {
+    haloScore,
+    haloRatio,
+    severeRatio,
+    averageHalo,
+    averageContrast,
+    haloSamples,
+    severeSamples,
+    sampleCount: count,
+    haloRisk,
   };
 }
 

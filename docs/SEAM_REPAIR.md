@@ -235,6 +235,14 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Certification metadata stores `compressionArtifactScore` and `compressionArtifactPeriod`; history downloads require the current compression-artifact gate.
 - Tests cover clean printable texture that must pass and synthetic macro-block compression artifacts that must fail.
 
+## 0.7.41 Sharpen Halo Gate
+
+- The quality gate now checks for over-sharpening halos: bright rims around dark strokes or dark rims around light strokes that make a pattern look artificially crisp on screen but dirty on fabric.
+- The detector scans horizontal and vertical luminance profiles for repeated ring-core-ring overshoot, while allowing normal high-contrast textile line work when the artifacts are sparse.
+- The issue is reported as `锐化光晕明显，不可修复` so the candidate is regenerated instead of being further sharpened or smoothed into a lower-quality handoff.
+- Certification metadata stores `sharpenHaloScore` and `sharpenHaloRatio`; history downloads require the current sharpen-halo gate.
+- Tests cover clean printable texture that must pass and synthetic bright-edge/dark-edge ringing that must fail.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

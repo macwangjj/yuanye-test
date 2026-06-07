@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.40-test";
+const clientVersion = "0.7.41-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -516,6 +516,7 @@ function recordHasCertifiedDownload(record) {
     typeof gate.upscaleArtifactScore === "number" &&
     typeof gate.posterizationScore === "number" &&
     typeof gate.compressionArtifactScore === "number" &&
+    typeof gate.sharpenHaloScore === "number" &&
     typeof gate.richnessScore === "number" &&
     typeof gate.layoutBalanceScore === "number" &&
     typeof gate.mirrorAxisScore === "number" &&
@@ -605,6 +606,8 @@ function buildPrintCertification(task, actionType = "generate") {
       posterizationToneBinRatio: typeof check.posterization?.toneBinRatio === "number" ? check.posterization.toneBinRatio : null,
       compressionArtifactScore: typeof check.compressionArtifact?.blockScore === "number" ? check.compressionArtifact.blockScore : null,
       compressionArtifactPeriod: typeof check.compressionArtifact?.period === "number" ? check.compressionArtifact.period : null,
+      sharpenHaloScore: typeof check.sharpenHalo?.haloScore === "number" ? check.sharpenHalo.haloScore : null,
+      sharpenHaloRatio: typeof check.sharpenHalo?.haloRatio === "number" ? check.sharpenHalo.haloRatio : null,
       richnessScore: typeof check.richness?.richnessScore === "number" ? check.richness.richnessScore : null,
       activeTextureRatio: typeof check.richness?.activeRatio === "number" ? check.richness.activeRatio : null,
       layoutBalanceScore: typeof check.layoutBalance?.balanceScore === "number" ? check.layoutBalance.balanceScore : null,
@@ -1684,6 +1687,7 @@ function seamCheckSummary(check) {
     `放大 ${Number(check.upscaleArtifact?.artifactScore || 0).toFixed(2)}`,
     `色阶 ${Number(check.posterization?.posterizationScore || 0).toFixed(2)}`,
     `压缩 ${Number(check.compressionArtifact?.blockScore || 0).toFixed(2)}`,
+    `光晕 ${Number(check.sharpenHalo?.haloScore || 0).toFixed(2)}`,
     `信息 ${(Number(check.richness?.activeRatio || 0) * 100).toFixed(0)}%`,
     `密度 ${(Number(check.textureDensity?.fineDetailRatio || 0) * 100).toFixed(0)}%`,
     `均衡 ${Number(check.layoutBalance?.balanceScore || 0).toFixed(2)}`,
@@ -1713,6 +1717,7 @@ function seamFailureMessage(check) {
   if (check.issues?.includes("低清放大痕迹，可增强")) return "低清放大痕迹，可增强";
   if (check.issues?.includes("色阶断层，可增强")) return "色阶断层，可增强";
   if (check.issues?.includes("压缩块噪点，不可修复")) return "压缩块噪点，不可修复";
+  if (check.issues?.includes("锐化光晕明显，不可修复")) return "锐化光晕明显，不可修复";
   if (check.issues?.includes("印花细节密度不足，可增强")) return "印花细节密度不足，可增强";
   if (check.issues?.includes("接缝细节发虚，可修复")) return "接缝细节发虚，可修复";
   if (check.issues?.includes("成品规格不正确，不可下载")) return "成品规格不正确，不可下载";
@@ -2215,6 +2220,7 @@ function measureSeamQuality(ctx, width, height) {
   const upscaleArtifact = measureUpscaleArtifact(data, width, height);
   const posterization = measurePosterizationArtifact(data, width, height);
   const compressionArtifact = measureCompressionArtifact(data, width, height);
+  const sharpenHalo = measureSharpenHaloArtifact(data, width, height);
   const richness = measurePrintRichness(data, width, height);
   const textureDensity = measurePrintTextureDensity(data, width, height);
   const layoutBalance = measurePatternBalance(data, width, height);
@@ -2280,6 +2286,7 @@ function measureSeamQuality(ctx, width, height) {
   if (!issues.length && upscaleArtifact.upscaleArtifactRisk) issues.push("低清放大痕迹，可增强");
   if (!issues.length && posterization.posterizationRisk) issues.push("色阶断层，可增强");
   if (!issues.length && compressionArtifact.compressionRisk) issues.push("压缩块噪点，不可修复");
+  if (!issues.length && sharpenHalo.haloRisk) issues.push("锐化光晕明显，不可修复");
   if (!issues.length && textureDensity.lowTextureDensityRisk) issues.push("印花细节密度不足，可增强");
   if (!issues.length && thinLine) issues.push("细线接缝，可修复");
   if (!issues.length && mildColor) issues.push("轻微色差，可修复");
@@ -2320,6 +2327,7 @@ function measureSeamQuality(ctx, width, height) {
     !upscaleArtifact.upscaleArtifactRisk &&
     !posterization.posterizationRisk &&
     !compressionArtifact.compressionRisk &&
+    !sharpenHalo.haloRisk &&
     !textureDensity.lowTextureDensityRisk &&
     !layoutBalance.centerDominanceRisk &&
     !clarity.blurRisk
@@ -2361,6 +2369,7 @@ function measureSeamQuality(ctx, width, height) {
     upscaleArtifact,
     posterization,
     compressionArtifact,
+    sharpenHalo,
     richness,
     textureDensity,
     layoutBalance,
@@ -3575,6 +3584,83 @@ function measureCompressionArtifact(data, width, height) {
   return {
     ...best,
     compressionRisk,
+  };
+}
+
+function measureSharpenHaloArtifact(data, width, height) {
+  const sampleStep = Math.max(1, Math.round(Math.max(width, height) / 420));
+  const rowStep = Math.max(sampleStep * 3, Math.round(height / 120));
+  const colStep = Math.max(sampleStep * 3, Math.round(width / 120));
+  let haloSamples = 0;
+  let severeSamples = 0;
+  let count = 0;
+  let scoreTotal = 0;
+  let contrastTotal = 0;
+
+  function scanLine(length, luminanceAt) {
+    for (let position = sampleStep * 2; position < length - sampleStep * 2; position += sampleStep) {
+      const a = luminanceAt(position - sampleStep * 2);
+      const b = luminanceAt(position - sampleStep);
+      const c = luminanceAt(position);
+      const d = luminanceAt(position + sampleStep);
+      const e = luminanceAt(position + sampleStep * 2);
+      const outer = (a + e) / 2;
+      const ring = (b + d) / 2;
+      const darkCore = c < outer - 18 && b > Math.max(a, c) + 8 && d > Math.max(e, c) + 8;
+      const lightCore = c > outer + 18 && b < Math.min(a, c) - 8 && d < Math.min(e, c) - 8;
+      let localHalo = 0;
+
+      if (darkCore) {
+        localHalo = Math.min(b - Math.max(a, c), d - Math.max(e, c), outer - c) +
+          Math.max(0, ring - outer) * 0.7;
+      }
+      if (lightCore) {
+        localHalo = Math.min(Math.min(a, c) - b, Math.min(e, c) - d, c - outer) +
+          Math.max(0, outer - ring) * 0.7;
+      }
+
+      const edgeContrast = Math.max(Math.abs(b - c), Math.abs(d - c), Math.abs(a - b), Math.abs(e - d));
+      if (localHalo > 6 && edgeContrast > 24) {
+        haloSamples += 1;
+        scoreTotal += localHalo;
+        contrastTotal += edgeContrast;
+        if (localHalo > 13 && edgeContrast > 40) severeSamples += 1;
+      }
+      count += 1;
+    }
+  }
+
+  for (let y = sampleStep * 2; y < height - sampleStep * 2; y += rowStep) {
+    scanLine(width, (x) => pixelLuminance(data, width, x, y));
+  }
+  for (let x = sampleStep * 2; x < width - sampleStep * 2; x += colStep) {
+    scanLine(height, (y) => pixelLuminance(data, width, x, y));
+  }
+
+  const haloRatio = haloSamples / Math.max(1, count);
+  const severeRatio = severeSamples / Math.max(1, count);
+  const averageHalo = scoreTotal / Math.max(1, haloSamples);
+  const averageContrast = contrastTotal / Math.max(1, haloSamples);
+  const densityWeight = Math.min(1, haloRatio / 0.02);
+  const haloScore = haloRatio * 120 +
+    severeRatio * 180 +
+    Math.max(0, averageHalo - 8) * 0.18 * densityWeight +
+    Math.max(0, averageContrast - 36) * 0.035 * densityWeight;
+  const haloRisk = haloScore > 5.2 &&
+    haloRatio > 0.018 &&
+    averageHalo > 8.2 &&
+    averageContrast > 30;
+
+  return {
+    haloScore,
+    haloRatio,
+    severeRatio,
+    averageHalo,
+    averageContrast,
+    haloSamples,
+    severeSamples,
+    sampleCount: count,
+    haloRisk,
   };
 }
 
