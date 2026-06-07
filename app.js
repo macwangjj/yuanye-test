@@ -30,6 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
+const clientVersion = "0.7.18-test";
 const generateTimeoutMs = 8 * 60 * 1000;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
@@ -476,8 +477,58 @@ function markTaskDownloaded(task) {
   task.nodes.download.classList.add("is-downloaded");
 }
 
+function taskHasCertifiedDownload(task) {
+  return Boolean(task?.resultJpgUrl && task?.qualityPassed === true && task?.seamCheck?.passed === true);
+}
+
+function recordHasCertifiedDownload(record) {
+  return Boolean(record?.imageUrl && record?.qualityPassed === true && record?.seamCheck?.passed !== false);
+}
+
+function updateTaskDownloadGate(task) {
+  const certified = taskHasCertifiedDownload(task);
+  task.nodes.download.disabled = !certified;
+  task.nodes.download.classList.toggle("is-certified", certified);
+  if (!certified) {
+    task.nodes.download.classList.remove("is-downloaded");
+    task.nodes.download.textContent = task.resultJpgUrl ? "未通过不可下载" : "下载 JPG";
+    return;
+  }
+  task.nodes.download.textContent = task.downloaded ? "已下载过" : "下载 JPG";
+  task.nodes.download.classList.toggle("is-downloaded", Boolean(task.downloaded));
+}
+
 function downloadNameForTask(task) {
   return `${task.patternCode || "YUANYE"}.jpg`;
+}
+
+function buildPrintCertification(task, actionType = "generate") {
+  const check = task.seamCheck || {};
+  const clarity = check.clarity || {};
+  return {
+    certified: taskHasCertifiedDownload(task),
+    actionType,
+    version: clientVersion,
+    target: {
+      widthPx: 4961,
+      heightPx: 7559,
+      dpi: 300,
+      format: "jpg",
+      use: "digital textile print",
+    },
+    gate: {
+      fourWayRepeat: check.passed === true,
+      qualityPassed: task.qualityPassed === true,
+      score: typeof check.score === "number" ? check.score : null,
+      rating: check.rating || "",
+      horizontalScore: typeof check.horizontalScore === "number" ? check.horizontalScore : null,
+      verticalScore: typeof check.verticalScore === "number" ? check.verticalScore : null,
+      tiledScore: Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0),
+      edgeBandScore: Math.max(check.bandHorizontal?.score || 0, check.bandVertical?.score || 0),
+      clarityScore: typeof clarity.detailScore === "number" ? clarity.detailScore : null,
+      issues: Array.isArray(check.issues) ? check.issues : [],
+    },
+  };
 }
 
 function createHistoryMarker(actionType, total = 1) {
@@ -881,9 +932,9 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
     task.nodes.fission.disabled = false;
     task.nodes.repair.disabled = !(shouldEdgeBlendRepair(lastCheck) || shouldForcePeriodicRepair(lastCheck));
     task.nodes.check.disabled = false;
-    task.nodes.download.disabled = false;
     task.nodes.generate.textContent = "重新生成";
     task.qualityPassed = Boolean(lastCheck?.passed);
+    updateTaskDownloadGate(task);
 
     if (task.qualityPassed) {
       task.nodes.select.disabled = false;
@@ -898,9 +949,10 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
       task.nodes.select.disabled = true;
       task.nodes.select.checked = false;
       toggleTaskSelection(task);
+      updateTaskDownloadGate(task);
       await saveHistory(task, historyMarker, "review");
       await deleteQueuedTask(task.id);
-      setTaskStatus(task, "需人工复核", `${seamFailureMessage(lastCheck)}。已轻修 ${task.repairAttempts} 次、重生 ${Math.max(0, task.generationAttempts - 1)} 次，建议人工预览后决定是否下载。`, 100);
+      setTaskStatus(task, "需人工复核", `${seamFailureMessage(lastCheck)}。已轻修 ${task.repairAttempts} 次、重生 ${Math.max(0, task.generationAttempts - 1)} 次；未通过认证前不开放成品下载。`, 100);
     }
   } catch (error) {
     const message = `${phase}失败：${error.message}`;
@@ -987,6 +1039,7 @@ function toggleTaskSelection(task) {
     selectedDownloads.set(key, {
       name: `${task.patternCode || "YUANYE"}.jpg`,
       dataUrl: task.resultJpgUrl,
+      certified: true,
     });
   } else {
     selectedDownloads.delete(key);
@@ -1022,16 +1075,17 @@ async function enhanceTask(task) {
     task.nodes.select.checked = check.passed;
     toggleTaskSelection(task);
     task.nodes.repair.disabled = !shouldHybridSeamRepair(check);
+    updateTaskDownloadGate(task);
     await saveHistory(task, historyMarker, "enhance");
     setTaskStatus(task, check.passed ? "已完成" : "需人工复核", check.passed
       ? `高清增强完成，${task.seamRating}，可以下载 JPG。`
-      : `高清增强完成，但${seamFailureMessage(check)}，建议人工复核。`, 100);
+      : `高清增强完成，但${seamFailureMessage(check)}；未通过认证前不开放成品下载。`, 100);
   } catch (error) {
     setTaskStatus(task, "失败", `高清增强失败：${error.message}`, 100);
   } finally {
     task.nodes.enhance.disabled = false;
     task.nodes.fission.disabled = false;
-    task.nodes.download.disabled = false;
+    updateTaskDownloadGate(task);
   }
 }
 
@@ -1056,10 +1110,11 @@ async function finishPrintClarityTask(task, options = {}) {
     task.nodes.select.disabled = !check.passed;
     task.nodes.select.checked = check.passed;
     toggleTaskSelection(task);
+    updateTaskDownloadGate(task);
     if (!options.quiet) {
       setTaskStatus(task, check.passed ? "已完成" : "需人工复核", check.passed
         ? `清晰度增强完成，${task.seamRating}，可以下载 JPG。`
-        : `清晰度增强后仍未通过，${seamFailureMessage(check)}，建议继续修缝或重生。`, 100);
+        : `清晰度增强后仍未通过，${seamFailureMessage(check)}；未通过认证前不开放成品下载。`, 100);
     }
     return check;
   } finally {
@@ -1094,17 +1149,18 @@ async function repairTask(task, options = {}) {
     task.nodes.select.disabled = !repairCheck.passed;
     task.nodes.select.checked = repairCheck.passed;
     toggleTaskSelection(task);
+    updateTaskDownloadGate(task);
     if (options.manual) {
       task.nodes.select.disabled = !repairCheck.passed;
       task.nodes.select.checked = repairCheck.passed;
       toggleTaskSelection(task);
-      task.nodes.download.disabled = false;
+      updateTaskDownloadGate(task);
       await saveHistory(task, createHistoryMarker(repairCheck.passed ? "repair" : "review"), repairCheck.passed ? "repair" : "review");
     }
     if (!options.quiet) {
       setTaskStatus(task, repairCheck.passed ? "已完成" : "需人工复核", repairCheck.passed
         ? `已轻修通过，${task.seamRating}，可以下载 JPG。`
-        : `轻修后仍未通过，${seamFailureMessage(repairCheck)}，建议重生或人工复核。`, 100);
+        : `轻修后仍未通过，${seamFailureMessage(repairCheck)}；未通过认证前不开放成品下载。`, 100);
     }
     return repairCheck;
   } catch (error) {
@@ -1138,16 +1194,17 @@ async function forceSeamlessTask(task, options = {}) {
     task.nodes.select.disabled = !forceCheck.passed;
     task.nodes.select.checked = forceCheck.passed;
     toggleTaskSelection(task);
+    updateTaskDownloadGate(task);
 
     if (options.manual) {
-      task.nodes.download.disabled = false;
+      updateTaskDownloadGate(task);
       await saveHistory(task, createHistoryMarker(forceCheck.passed ? "repair" : "review"), forceCheck.passed ? "repair" : "review");
     }
 
     if (!options.quiet) {
       setTaskStatus(task, forceCheck.passed ? "已完成" : "需人工复核", forceCheck.passed
         ? `强制四方连续处理通过，${task.seamRating}，可以下载 JPG。`
-        : `强制处理后仍未通过，${seamFailureMessage(forceCheck)}，建议重生或人工复核。`, 100);
+        : `强制处理后仍未通过，${seamFailureMessage(forceCheck)}；未通过认证前不开放成品下载。`, 100);
     }
     return forceCheck;
   } catch (error) {
@@ -1205,6 +1262,7 @@ async function aiOffsetRepairTask(task, previousCheck) {
   task.nodes.select.disabled = !check.passed;
   task.nodes.select.checked = check.passed;
   toggleTaskSelection(task);
+  updateTaskDownloadGate(task);
   return check;
 }
 
@@ -2868,6 +2926,11 @@ function withJpegDpi(dataUrl, dpi) {
 
 function downloadJpg(task) {
   if (!task.resultJpgUrl) return;
+  if (!taskHasCertifiedDownload(task)) {
+    showToast("这张图未通过商用下载认证，请先修复或重新生成。");
+    updateTaskDownloadGate(task);
+    return;
+  }
   const link = document.createElement("a");
   link.href = task.resultJpgUrl;
   link.download = downloadNameForTask(task);
@@ -2885,9 +2948,9 @@ function updateBatchState() {
 }
 
 async function downloadSelectedZip() {
-  const items = [...selectedDownloads.values()];
+  const items = [...selectedDownloads.values()].filter((item) => item.certified !== false);
   if (!items.length) {
-    showToast("请先勾选要下载的图案");
+    showToast("请先勾选已通过认证的图案");
     return;
   }
 
@@ -3035,6 +3098,7 @@ async function saveHistory(task, historyMarker = createHistoryMarker("generate")
         locallyRepaired: task.locallyRepaired,
         autoRegenerated: task.autoRegenerated,
         qualityPassed: task.qualityPassed,
+        certification: buildPrintCertification(task, actionType),
         enhanceStrength: els.enhanceStrength.value,
       }),
     });
@@ -3099,8 +3163,8 @@ function renderHistoryManager(options = {}) {
             <span>${escapeHtml(activeGroup.subLabel)} · ${activeGroup.records.length} 张</span>
           </div>
           <div class="history-detail-actions">
-            <button class="secondary history-select-active" type="button">选择当前任务</button>
-            <button class="secondary history-download-active" type="button">下载当前任务</button>
+            <button class="secondary history-select-active" type="button">选择合格稿件</button>
+            <button class="secondary history-download-active" type="button">下载合格稿件</button>
           </div>
         </div>
         <div class="history-group-list">
@@ -3158,8 +3222,8 @@ function renderHistoryManager(options = {}) {
   els.historyGrid.querySelectorAll(".history-select-one").forEach((input) => {
     input.addEventListener("change", () => {
       const key = `history:${input.dataset.id}`;
-      if (input.checked) {
-        selectedDownloads.set(key, { name: input.dataset.name, url: input.dataset.url });
+      if (input.checked && input.dataset.certified === "true") {
+        selectedDownloads.set(key, { name: input.dataset.name, url: input.dataset.url, certified: true });
       } else {
         selectedDownloads.delete(key);
       }
@@ -3202,35 +3266,38 @@ function selectActiveHistoryGroup() {
     return;
   }
 
-  activeGroup.records.forEach((record) => {
+  const certifiedRecords = activeGroup.records.filter(recordHasCertifiedDownload);
+  certifiedRecords.forEach((record) => {
     const name = record.downloadName || `${record.patternCode || "yuanye-pattern"}.jpg`;
     selectedDownloads.set(`history:${record.id}`, {
       name,
       url: record.imageUrl,
+      certified: true,
     });
   });
 
   els.historyGrid.querySelectorAll(".history-select-one").forEach((input) => {
-    input.checked = true;
+    input.checked = input.dataset.certified === "true";
   });
   updateBatchState();
-  showToast(`已选择当前任务 ${activeGroup.records.length} 张`);
+  showToast(certifiedRecords.length ? `已选择合格稿件 ${certifiedRecords.length} 张` : "当前任务没有通过认证的稿件");
 }
 
 async function downloadActiveHistoryGroup() {
   const activeGroup = historyGroupsCache.find((group) => group.key === activeHistoryGroupKey) || historyGroupsCache[0];
   const button = els.historyGrid.querySelector(".history-download-active");
-  if (!activeGroup?.records?.length) {
-    showToast("当前任务没有可下载的图案");
+  const certifiedRecords = (activeGroup?.records || []).filter(recordHasCertifiedDownload);
+  if (!certifiedRecords.length) {
+    showToast("当前任务没有通过认证的可下载稿件");
     return;
   }
 
   if (button) button.disabled = true;
-  showToast(`正在打包当前任务 ${activeGroup.records.length} 张`);
+  showToast(`正在打包合格稿件 ${certifiedRecords.length} 张`);
 
   try {
     const files = [];
-    for (const record of activeGroup.records) {
+    for (const record of certifiedRecords) {
       const name = record.downloadName || `${record.patternCode || "yuanye-pattern"}.jpg`;
       const bytes = await fetchBytes(record.imageUrl);
       files.push({ name, bytes });
@@ -3266,7 +3333,9 @@ function historyTaskTitle(group) {
 function historyRecordTemplate(record) {
   const name = record.downloadName || `${record.patternCode || "yuanye-pattern"}.jpg`;
   const selectedKey = `history:${record.id}`;
+  const certified = recordHasCertifiedDownload(record);
   const qualityText = record.qualityPassed === false ? "需人工复核" : record.qualityPassed === true ? "已通过" : "";
+  const certificationText = certified ? "商用下载认证" : "未认证下载";
   const attemptsText = record.generationAttempts > 1 ? ` · 重生${record.generationAttempts - 1}次` : "";
   const repairText = record.locallyRepaired ? ` · 已轻修${record.repairAttempts || 1}次` : record.repairAttempts ? ` · 轻修${record.repairAttempts}次未通过` : "";
   const issueText = Array.isArray(record.issueTypes) && record.issueTypes.length ? ` · ${record.issueTypes.join("、")}` : "";
@@ -3281,17 +3350,20 @@ function historyRecordTemplate(record) {
         <span>${formatFullTime(new Date(record.createdAt))}</span>
         <span>${escapeHtml(record.rating || "未检查")}${typeof record.score === "number" ? ` · ${record.score.toFixed(2)}` : ""}${escapeHtml(repairText)}${escapeHtml(attemptsText)}${escapeHtml(issueText)}</span>
         ${qualityText ? `<span>${escapeHtml(qualityText)}</span>` : ""}
+        <span class="${certified ? "certified-chip" : "uncertified-chip"}">${certificationText}</span>
         ${isDownloaded(record.downloadName) ? `<span class="downloaded-chip">已下载过</span>` : ""}
       </div>
       <div class="history-actions">
         <label class="select-pill history-select">
-          <input class="history-select-one" type="checkbox" data-id="${record.id}" data-url="${record.imageUrl}" data-name="${escapeHtml(name)}" ${selectedDownloads.has(selectedKey) ? "checked" : ""} />
+          <input class="history-select-one" type="checkbox" data-id="${record.id}" data-url="${record.imageUrl}" data-name="${escapeHtml(name)}" data-certified="${certified}" ${selectedDownloads.has(selectedKey) && certified ? "checked" : ""} ${certified ? "" : "disabled"} />
           <span>选择</span>
         </label>
         <button class="secondary history-preview" type="button" data-url="${record.imageUrl}" data-name="${escapeHtml(record.patternCode || record.sourceName)}">预览</button>
         <button class="secondary history-fission" type="button" data-id="${escapeHtml(record.id)}">以图裂变</button>
         <button class="secondary history-check" data-url="${record.imageUrl}">检查循环</button>
-        <a class="secondary history-download ${isDownloaded(record.downloadName) ? "is-downloaded" : ""}" href="${record.imageUrl}" download="${escapeHtml(name)}" data-name="${escapeHtml(name)}">${isDownloaded(record.downloadName) ? "再次下载" : "下载"}</a>
+        ${certified
+          ? `<a class="secondary history-download ${isDownloaded(record.downloadName) ? "is-downloaded" : ""}" href="${record.imageUrl}" download="${escapeHtml(name)}" data-name="${escapeHtml(name)}">${isDownloaded(record.downloadName) ? "再次下载" : "下载"}</a>`
+          : `<button class="secondary history-download" type="button" disabled>未认证</button>`}
       </div>
     </article>
   `;
@@ -3654,7 +3726,7 @@ els.downloadSelected?.addEventListener("click", downloadSelectedZip);
 els.pauseAll?.addEventListener("click", pauseAllTasks);
 els.clearAllTasks?.addEventListener("click", clearAllCurrentTasks);
 els.selectAllHistory?.addEventListener("click", () => {
-  const inputs = [...els.historyGrid.querySelectorAll(".history-select-one")];
+  const inputs = [...els.historyGrid.querySelectorAll(".history-select-one:not(:disabled)")];
   const shouldSelect = inputs.some((input) => !input.checked);
   inputs.forEach((input) => {
     input.checked = shouldSelect;

@@ -61,6 +61,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - AI Offset repair now uses the native generated image when available and sends PNG offset/mask assets, reducing repeated JPEG compression before the final print export.
 - Local edge repair and forced periodic repair add a small detail-restoration pass after seam blending so repaired seams do not look overly soft.
 
+## 0.7.18 Commercial Download Gate
+
+- Download buttons now open only for records that pass the current four-way repeat and print-clarity gate.
+- Review/fail records remain visible for preview, recheck, and fission, but they are not selectable for batch download and are not included in task ZIP exports.
+- Each saved record can carry a `certification` object with target pixels, DPI, format, version, seam scores, tiled-preview score, edge-band score, clarity score, and issue list.
+- History records show `商用下载认证` or `未认证下载`, making it harder to confuse test failures with printable handoff files.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.
