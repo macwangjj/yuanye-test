@@ -3483,6 +3483,30 @@ async function makeQaGenerationCandidateFromUrl(url, options) {
   let finalCheck = rawCheck;
   const steps = ["generate"];
 
+  if (qaOptions.aiRepair !== false && !finalCheck.passed && shouldAiInternalGuideRepair(finalCheck)) {
+    const aiInternalJpg = await makeQaAiInternalGuideRepairJpg(finalJpg, finalCheck);
+    const aiInternalCheck = await checkSeamQuality(aiInternalJpg, { skipPrintSpec });
+    if (aiInternalCheck.passed || isSeamCheckBetter(aiInternalCheck, finalCheck)) {
+      finalJpg = aiInternalJpg;
+      finalCheck = aiInternalCheck;
+      steps.push("ai-internal");
+    } else {
+      steps.push("ai-internal:rejected");
+    }
+  }
+
+  if (qaOptions.aiRepair !== false && !finalCheck.passed && shouldAiOffsetRepair(finalCheck)) {
+    const aiOffsetJpg = await makeQaAiOffsetRepairJpg(finalJpg, finalCheck);
+    const aiOffsetCheck = await checkSeamQuality(aiOffsetJpg, { skipPrintSpec });
+    if (aiOffsetCheck.passed || isSeamCheckBetter(aiOffsetCheck, finalCheck)) {
+      finalJpg = aiOffsetJpg;
+      finalCheck = aiOffsetCheck;
+      steps.push("ai-offset");
+    } else {
+      steps.push("ai-offset:rejected");
+    }
+  }
+
   if (qaOptions.repair !== false && !finalCheck.passed && shouldEdgeBlendRepair(finalCheck)) {
     const repairedJpg = await makeEdgeBlendRepairJpg(finalJpg, finalCheck);
     const repairedCheck = await checkSeamQuality(repairedJpg, { skipPrintSpec });

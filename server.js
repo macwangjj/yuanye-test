@@ -28,6 +28,7 @@ const imageRequestTimeoutMs = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS || 3000
 const generateRouteTimeoutMs = Number(process.env.YUANYE_GENERATE_TIMEOUT_MS || 460000);
 const generationJobTtlMs = Number(process.env.YUANYE_GENERATION_JOB_TTL_MS || 30 * 60 * 1000);
 const generationJobs = new Map();
+const nonImageModelCache = new Set();
 
 function loadDotEnv() {
   const envPath = join(root, ".env");
@@ -277,7 +278,7 @@ async function generateImage(payload) {
   let lastError;
   const skippedModels = new Set();
   for (const attempt of attempts) {
-    if (skippedModels.has(attempt.model)) continue;
+    if (skippedModels.has(attempt.model) || nonImageModelCache.has(attempt.model)) continue;
     try {
       return await withTransientRetry(() => runImageAttempt({
         attempt,
@@ -290,6 +291,7 @@ async function generateImage(payload) {
       lastError = error;
       if (isNonImageModelError(error)) {
         skippedModels.add(attempt.model);
+        nonImageModelCache.add(attempt.model);
         continue;
       }
       if (!isRetriableImageError(error)) {

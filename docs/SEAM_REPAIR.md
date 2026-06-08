@@ -18,7 +18,7 @@ Real generation yield can be measured with:
 node tools/qa-generate.mjs --base http://127.0.0.1:4190 --count 3 /history/example.jpg
 ```
 
-This calls the current frontend prompt builder and image API through the QA page, then exports and scores each candidate with the same gates used by the app.
+This calls the current frontend prompt builder and image API through the QA page, then exports and scores each candidate with the same gates used by the app. By default it also runs the QA-safe AI seam repair follow-up before local repair; pass `--no-ai-repair` or `--no-repair` for narrower diagnostics.
 
 ## Strategy
 

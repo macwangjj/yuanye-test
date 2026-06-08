@@ -12,5 +12,6 @@ test("qa-generate reuses the browser QA harness and real generation endpoint", (
   assert.equal(typeof qaBatch.CdpClient, "function");
   assert.match(qaGenerateSource, /makeQaGenerationCandidateFromUrl/);
   assert.match(qaGenerateSource, /candidateIndex/);
+  assert.match(qaGenerateSource, /aiRepair/);
   assert.match(qaGenerateSource, /summarizeResults/);
 });

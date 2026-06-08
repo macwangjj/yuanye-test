@@ -31,9 +31,12 @@ test("non-image model errors skip the rest of that model attempts", () => {
   const isNonImageModelErrorSource = extractFunction(serverSource, "isNonImageModelError");
 
   assert.match(generateImageSource, /const skippedModels = new Set\(\)/);
+  assert.match(serverSource, /const nonImageModelCache = new Set\(\)/);
   assert.match(generateImageSource, /skippedModels\.has\(attempt\.model\)/);
+  assert.match(generateImageSource, /nonImageModelCache\.has\(attempt\.model\)/);
   assert.match(generateImageSource, /isNonImageModelError\(error\)/);
   assert.match(generateImageSource, /skippedModels\.add\(attempt\.model\)/);
+  assert.match(generateImageSource, /nonImageModelCache\.add\(attempt\.model\)/);
   assert.match(isNonImageModelErrorSource, /requires an image model/);
 });
 

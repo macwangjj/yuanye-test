@@ -20,6 +20,7 @@ function parseArgs(argv) {
     attempt: 1,
     timeoutMs: 900000,
     repair: true,
+    aiRepair: true,
     password: null,
     passwordEnv: "YUANYE_PASSWORD",
     noLogin: false,
@@ -31,6 +32,8 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       options.help = true;
+    } else if (arg === "--no-ai-repair") {
+      options.aiRepair = false;
     } else if (arg === "--no-repair") {
       options.repair = false;
     } else if (arg === "--no-login") {
@@ -82,6 +85,7 @@ async function main() {
       "  --count <n>           Candidates to generate per source. Default: 2",
       "  --attempt <n>         Prompt attempt number to use. Default: 1",
       "  --timeout <ms>        Per-candidate browser timeout. Default: 900000",
+      "  --no-ai-repair        Disable AI seam-repair follow-up after generation.",
       "  --no-repair           Score only raw generated JPG candidates.",
       "  --password-env <name>  Env/.env variable used for site login. Default: YUANYE_PASSWORD",
       "  --password <value>     Site login password. Prefer --password-env to keep secrets out of ps output.",
@@ -110,6 +114,7 @@ async function main() {
           attempt: options.attempt,
           candidateIndex,
           candidateCount: options.count,
+          aiRepair: options.aiRepair,
           repair: options.repair,
         }, options.timeoutMs);
         results.push(result);
@@ -133,6 +138,7 @@ async function runGenerationCandidate(client, sessionId, input, timeoutMs) {
         attempt: payload.attempt,
         candidateIndex: payload.candidateIndex,
         candidateCount: payload.candidateCount,
+        aiRepair: payload.aiRepair,
         repair: payload.repair,
       });
     } catch (error) {

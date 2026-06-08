@@ -41,6 +41,7 @@ test("QA tools expose real generation candidate checks", () => {
   assert.match(installQaTools, /makeQaGenerationCandidateFromUrl/);
   assert.match(generatorSource, /requestImageGeneration/);
   assert.match(generatorSource, /candidateIndex/);
+  assert.match(generatorSource, /makeQaAiOffsetRepairJpg/);
   assert.match(generatorSource, /checkSeamQuality/);
 });
 
