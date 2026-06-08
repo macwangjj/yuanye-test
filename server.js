@@ -275,7 +275,9 @@ async function generateImage(payload) {
   }));
 
   let lastError;
+  const skippedModels = new Set();
   for (const attempt of attempts) {
+    if (skippedModels.has(attempt.model)) continue;
     try {
       return await withTransientRetry(() => runImageAttempt({
         attempt,
@@ -286,6 +288,10 @@ async function generateImage(payload) {
       }));
     } catch (error) {
       lastError = error;
+      if (isNonImageModelError(error)) {
+        skippedModels.add(attempt.model);
+        continue;
+      }
       if (!isRetriableImageError(error)) {
         throw error;
       }
@@ -469,6 +475,10 @@ function isRetriableImageError(error) {
     return false;
   }
   return /pattern|参数|parameter|unsupported|unknown|invalid|field|字段|model_not_found|No available channel|multipart|convert_request_failed|parse|fetch failed|bad_response_status_code|openai_error|curl|Command failed|timed out|ECONNRESET|socket|network/i.test(error.message);
+}
+
+function isNonImageModelError(error) {
+  return /images endpoint requires an image model|requires an image model|not an image model/i.test(error?.message || "");
 }
 
 function isTransientUpstreamError(error) {

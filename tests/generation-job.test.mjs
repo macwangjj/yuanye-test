@@ -26,6 +26,17 @@ test("slow image timeouts move to the next request form instead of retrying one 
   assert.match(fetchWithTimeoutSource, /isSlowImageTimeoutError\(error\)/);
 });
 
+test("non-image model errors skip the rest of that model attempts", () => {
+  const generateImageSource = extractFunction(serverSource, "generateImage");
+  const isNonImageModelErrorSource = extractFunction(serverSource, "isNonImageModelError");
+
+  assert.match(generateImageSource, /const skippedModels = new Set\(\)/);
+  assert.match(generateImageSource, /skippedModels\.has\(attempt\.model\)/);
+  assert.match(generateImageSource, /isNonImageModelError\(error\)/);
+  assert.match(generateImageSource, /skippedModels\.add\(attempt\.model\)/);
+  assert.match(isNonImageModelErrorSource, /requires an image model/);
+});
+
 test("frontend uses background jobs for long image generation and AI seam repair", () => {
   const requestGeneratedImageSource = extractFunction(appSource, "requestGeneratedImage");
   const aiOffsetRepairTaskSource = extractFunction(appSource, "aiOffsetRepairTask");

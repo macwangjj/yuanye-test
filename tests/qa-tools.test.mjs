@@ -34,6 +34,16 @@ test("QA tools are installed before startup history and queue work", () => {
   assert.ok(installIndex < loadHistoryIndex);
 });
 
+test("QA tools expose real generation candidate checks", () => {
+  const installQaTools = extractFunction(appSource, "installQaTools");
+  const generatorSource = extractFunction(appSource, "makeQaGenerationCandidateFromUrl");
+
+  assert.match(installQaTools, /makeQaGenerationCandidateFromUrl/);
+  assert.match(generatorSource, /requestImageGeneration/);
+  assert.match(generatorSource, /candidateIndex/);
+  assert.match(generatorSource, /checkSeamQuality/);
+});
+
 test("QA check output keeps structure mode separate from commercial certification", () => {
   const runQaCheck = extractFunction(appSource, "runQaCheck");
 

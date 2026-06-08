@@ -215,7 +215,7 @@ function parseRepairMode(value) {
   return mode;
 }
 
-async function launchChrome() {
+export async function launchChrome() {
   const userDataDir = await mkdtempChromeProfile();
   const child = spawn(chromePath, [
     "--headless=new",
@@ -280,7 +280,7 @@ function waitForDevToolsUrl(child) {
   });
 }
 
-async function createPageSession(client) {
+export async function createPageSession(client) {
   const target = await client.send("Target.createTarget", { url: "about:blank" });
   const attached = await client.send("Target.attachToTarget", {
     targetId: target.targetId,
@@ -291,7 +291,7 @@ async function createPageSession(client) {
   return attached.sessionId;
 }
 
-async function openQaPage(client, sessionId, options) {
+export async function openQaPage(client, sessionId, options) {
   const { base, timeoutMs, password } = options;
   const url = qaPageUrl(base);
   if (password) {
@@ -529,7 +529,7 @@ function loginPageUrl(base) {
   return url.toString();
 }
 
-function resolvePassword(options) {
+export function resolvePassword(options) {
   if (options.noLogin) return "";
   if (typeof options.password === "string") return options.password;
   if (!options.passwordEnv) return "";
@@ -550,7 +550,7 @@ function readDotEnvValue(name) {
   return "";
 }
 
-async function evaluate(client, sessionId, expression, timeoutMs) {
+export async function evaluate(client, sessionId, expression, timeoutMs) {
   const response = await client.send("Runtime.evaluate", {
     expression,
     awaitPromise: true,
@@ -563,7 +563,7 @@ async function evaluate(client, sessionId, expression, timeoutMs) {
   return response.result?.value;
 }
 
-class CdpClient {
+export class CdpClient {
   constructor(socket) {
     this.socket = socket;
     this.nextId = 1;

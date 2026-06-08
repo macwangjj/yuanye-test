@@ -3415,6 +3415,7 @@ function installQaTools() {
     makeStrictSeamlessJpg,
     makeQaAiInternalGuideRepairJpg,
     makeQaAiOffsetRepairJpg,
+    makeQaGenerationCandidateFromUrl,
   });
 
   const output = document.createElement("pre");
@@ -3448,6 +3449,94 @@ async function runQaCheck(url, mode, output) {
       error: error.message || String(error),
     }, null, 2);
   }
+}
+
+async function makeQaGenerationCandidateFromUrl(url, options) {
+  const qaOptions = options || {};
+  const sourceDataUrl = await imageUrlToDataUrl(url);
+  const attempt = Math.max(1, Number(qaOptions.attempt || 1));
+  const candidateIndex = Math.max(1, Number(qaOptions.candidateIndex || 1));
+  const candidateCount = Math.max(1, Number(qaOptions.candidateCount || generationCandidateCountForAttempt(attempt, qaOptions.previousCheck)));
+  const generationMode = qaOptions.generationMode === "fission" ? "fission" : "generate";
+  const referenceName = qaOptions.name || qaFileNameFromUrl(url);
+  const prompt = generationMode === "fission"
+    ? buildFissionPrompt({ generationMode, parentPatternCode: qaOptions.parentPatternCode || "" }, qaOptions.previousCheck || null, attempt, candidateIndex, candidateCount)
+    : buildPrompt(qaOptions.previousCheck || null, attempt, candidateIndex, candidateCount);
+  const payload = await requestImageGeneration({
+    image: {
+      name: referenceName,
+      type: dataUrlMimeType(sourceDataUrl),
+      dataUrl: sourceDataUrl,
+    },
+    prompt,
+    size: qaOptions.size || els.size.value,
+  });
+  const exportMetrics = {};
+  const rawJpg = await makeJpg(payload.image.dataUrl, {
+    enhance: false,
+    repair: false,
+    exportMetrics,
+  });
+  const skipPrintSpec = qaOptions.skipPrintSpec === true;
+  const rawCheck = await checkSeamQuality(rawJpg, { skipPrintSpec });
+  let finalJpg = rawJpg;
+  let finalCheck = rawCheck;
+  const steps = ["generate"];
+
+  if (qaOptions.repair !== false && !finalCheck.passed && shouldEdgeBlendRepair(finalCheck)) {
+    const repairedJpg = await makeEdgeBlendRepairJpg(finalJpg, finalCheck);
+    const repairedCheck = await checkSeamQuality(repairedJpg, { skipPrintSpec });
+    if (repairedCheck.passed || isSeamCheckBetter(repairedCheck, finalCheck)) {
+      finalJpg = repairedJpg;
+      finalCheck = repairedCheck;
+      steps.push("pipeline");
+    } else {
+      steps.push("pipeline:rejected");
+    }
+  }
+
+  if (qaOptions.repair !== false && !finalCheck.passed && shouldForcePeriodicRepair(finalCheck)) {
+    const strictJpg = await makeStrictSeamlessJpg(finalJpg, finalCheck);
+    const strictCheck = await checkSeamQuality(strictJpg, { skipPrintSpec });
+    if (strictCheck.passed || isSeamCheckBetter(strictCheck, finalCheck)) {
+      finalJpg = strictJpg;
+      finalCheck = strictCheck;
+      steps.push("strict");
+    } else {
+      steps.push("strict:rejected");
+    }
+  }
+
+  return {
+    status: "ok",
+    source: url,
+    mode: generationMode,
+    attempt,
+    candidateIndex,
+    candidateCount,
+    steps,
+    passed: finalCheck.passed,
+    issue: seamFailureMessage(finalCheck),
+    score: Math.round(finalCheck.score * 1000) / 1000,
+    raw: compactQaCheck(rawCheck, { mode: "full", url: "generated-raw" }),
+    check: compactQaCheck(finalCheck, { mode: "full", url: "generated-final" }),
+    exportMetrics,
+    byteSize: dataUrlByteSize(finalJpg),
+  };
+}
+
+function qaFileNameFromUrl(url) {
+  try {
+    const parsed = new URL(url, window.location.href);
+    return decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "qa-reference.jpg");
+  } catch {
+    return "qa-reference.jpg";
+  }
+}
+
+function dataUrlMimeType(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)/);
+  return match?.[1] || "image/jpeg";
 }
 
 async function runQaRepairCheck(url, mode, output) {

@@ -12,6 +12,14 @@ The 80% target is treated as batch yield: for every image that ships, the same s
 - Failed candidates are still scored by the same QA gates; the app keeps only the best candidate and never opens download unless a candidate passes certification.
 - Local seam repair now uses a candidate rollback path: experimental low-frequency toroidal correction is accepted only when it scores better than the baseline edge blend.
 
+Real generation yield can be measured with:
+
+```bash
+node tools/qa-generate.mjs --base http://127.0.0.1:4190 --count 3 /history/example.jpg
+```
+
+This calls the current frontend prompt builder and image API through the QA page, then exports and scores each candidate with the same gates used by the app.
+
 ## Strategy
 
 1. Generate one repeat tile from the reference image.
