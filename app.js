@@ -30,13 +30,15 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.66-test";
+const clientVersion = "0.7.67-test";
 const generateJobCreateTimeoutMs = 30000;
 const generateJobPollTimeoutMs = 30000;
 const generateJobMaxWaitMs = 20 * 60 * 1000;
 const generateJobPollIntervalMs = 2500;
 const maxAutoRegenerations = 3;
 const maxAiSeamRepairs = 2;
+const generationCandidateSamplesBase = 2;
+const generationCandidateSamplesMax = 3;
 let activeHistoryGroupKey = "";
 let historyGroupsCache = [];
 let queueDbPromise = null;
@@ -835,10 +837,46 @@ function retryGuidanceForIssue(issue) {
   return "总体重生：重新设计一个真实四方连续的单个循环单元，不要把上一张图裁切、镜像、模糊或简单拼贴。";
 }
 
-function buildPrompt(previousCheck = null, attempt = 1) {
+function generationCandidateCountForAttempt(attempt = 1, previousCheck = null) {
+  const attemptNumber = Math.max(1, Number(attempt) || 1);
+  const issueText = collectQualityIssueText(previousCheck);
+  const structuralSeam = isStructuralSeamIssue(issueText);
+  const lateAttempt = attemptNumber >= Math.max(2, maxAutoRegenerations);
+  return structuralSeam || lateAttempt ? generationCandidateSamplesMax : generationCandidateSamplesBase;
+}
+
+function buildCandidateVariationGuidance(candidateIndex = 1, candidateCount = 1, attempt = 1, previousCheck = null) {
+  const count = Math.max(1, Number(candidateCount) || 1);
+  if (count <= 1) return "";
+
+  const index = Math.max(1, Math.min(count, Number(candidateIndex) || 1));
+  const issueText = collectQualityIssueText(previousCheck);
+  const structuralSeam = isStructuralSeamIssue(issueText);
+  const profiles = structuralSeam
+    ? [
+        "候选 A：先做四边四角闭合，再补内部花型；边缘使用细枝、织物颗粒和小叶片做真实跨边延续。",
+        "候选 B：使用小中型 all-over 连续纹样，减少大主体压边，让上下左右对边坐标更容易准确闭合。",
+        "候选 C：采用 offset repeat 思路，把潜在接缝移到画面中心重画，最终边缘保持自然连续且不留修补带。",
+      ]
+    : [
+        "候选 A：保持参考图气质，采用均衡满铺构图，优先让边缘和四角自然闭合。",
+        "候选 B：降低中心主体权重，用更细密的辅助元素和织物纹理提高循环稳定性。",
+        "候选 C：用更克制的边缘元素和更清晰的内部层次，避免白边、画框、暗角和预览网格。",
+      ];
+  const profile = profiles[(index - 1) % profiles.length];
+  return [
+    `本轮生成第 ${index}/${count} 个候选。这个候选必须和同轮其他候选采用不同构图，不要重复上一张布局。`,
+    profile,
+    "候选输出后会被自动 2×2/3×3 严格检测；只有完全无缝且高清的单元才允许进入成品。",
+  ].join("\n");
+}
+
+function buildPrompt(previousCheck = null, attempt = 1, candidateIndex = 1, candidateCount = 1) {
   const styleNote = els.styleNotes.value.trim() || "严格读取参考图的艺术风格、配色、笔触、元素气质、疏密节奏与高级面料感，不新增与参考图调性冲突的元素。";
   const attemptGuidance = buildAttemptStrategyGuidance(attempt, previousCheck);
   const strategyNote = attemptGuidance ? `\n\n${attemptGuidance}` : "";
+  const candidateGuidance = buildCandidateVariationGuidance(candidateIndex, candidateCount, attempt, previousCheck);
+  const candidateNote = candidateGuidance ? `\n\n${candidateGuidance}` : "";
   const retryGuidance = buildRetryGuidance(previousCheck);
   const retryNote = retryGuidance ? `\n\n${retryGuidance}` : "";
   return `请基于上传的参考图进行延展设计，生成可用于服装面料数码印花的大尺寸四方连续无缝循环图案。
@@ -872,15 +910,17 @@ function buildPrompt(previousCheck = null, attempt = 1) {
 - 抽象纹理要保持流向连续；植物花卉要避免枝叶和花瓣在边缘断头；佩斯利、几何和民族纹样要避免规律错位、半个图形断裂或回头没有接上。
 - 不要出现一个巨大主体占据中心。
 - 保持稀疏、均衡、自然的服装面料图案节奏。
-- 边缘区域必须像画面内部一样自然，最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${strategyNote}${retryNote}`;
+- 边缘区域必须像画面内部一样自然，最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${strategyNote}${candidateNote}${retryNote}`;
 }
 
-function buildFissionPrompt(task, previousCheck = null, attempt = 1) {
+function buildFissionPrompt(task, previousCheck = null, attempt = 1, candidateIndex = 1, candidateCount = 1) {
   const styleNote = els.styleNotes.value.trim() || "保持原图的艺术风格、配色、笔触、元素气质、疏密节奏与高级面料感。";
   const strength = fissionStrengthProfile();
   const parentNote = task?.parentPatternCode ? `\n- 原图编号：${task.parentPatternCode}。新图要像同一系列的延展款，但不能只是复制、裁切、镜像或轻微调色。` : "";
   const attemptGuidance = buildAttemptStrategyGuidance(attempt, previousCheck);
   const strategyNote = attemptGuidance ? `\n\n${attemptGuidance}` : "";
+  const candidateGuidance = buildCandidateVariationGuidance(candidateIndex, candidateCount, attempt, previousCheck);
+  const candidateNote = candidateGuidance ? `\n\n${candidateGuidance}` : "";
   const retryGuidance = buildRetryGuidance(previousCheck);
   const retryNote = retryGuidance ? `\n\n${retryGuidance}` : "";
   return `请把上传图片作为已经成品化的无缝印花参考图，先反推它的核心提示词：风格、配色、笔触、材质质感、构图密度、面料气质和连续纹样规则；再基于这些核心提示词重新设计一张同系列但元素明显变化的新图案。
@@ -920,7 +960,7 @@ function buildFissionPrompt(task, previousCheck = null, attempt = 1) {
 - 边缘元素必须真实跨边延续，不允许只在边缘淡化、镜像糊边、纯色过渡或模糊涂抹来遮盖接缝。
 - 生成时请优先采用 Offset repeat 工作法：先把潜在边缘接缝移动到画面中心进行自然重绘，再移回单元图；最终单元图边缘不应留下修补带。
 - 画面内部不能出现任何横向或竖向长直拼接带、重复块硬边、网格分割线或平铺预览边界。
-- 最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${strategyNote}${retryNote}`;
+- 最终 2×2 平铺预览中不能出现任何横档、竖档或直线接缝。${strategyNote}${candidateNote}${retryNote}`;
 }
 
 function fissionStrengthProfile() {
@@ -1109,6 +1149,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
   task.repairCheck = null;
   task.exportMetrics = null;
   task.generationAttempts = 0;
+  task.generationCandidateSamples = 0;
   task.repairAttempts = 0;
   task.aiRepairAttempts = 0;
   task.locallyRepaired = false;
@@ -1134,109 +1175,129 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
     let lastCheck = null;
     let finalAction = "review";
     let bestCandidate = null;
+    generationLoop:
     for (let attempt = 1; attempt <= maxAutoRegenerations + 1; attempt += 1) {
       task.generationAttempts = attempt;
-      phase = "请求图片生成接口";
-      setTaskStatus(task, "生成中", attempt === 1
-        ? "正在上传参考图并生成四方连续图案。"
-        : `检测未通过，正在自动重新生成 ${attempt - 1}/${maxAutoRegenerations}。`, attempt === 1 ? 28 : 34);
+      const candidateCount = generationCandidateCountForAttempt(attempt, lastCheck);
+      let attemptBest = null;
 
-      const payload = await requestGeneratedImage(task, lastCheck, attempt);
+      for (let candidateIndex = 1; candidateIndex <= candidateCount; candidateIndex += 1) {
+        task.generationCandidateSamples += 1;
+        const candidateText = candidateCount > 1 ? `候选 ${candidateIndex}/${candidateCount}，` : "";
+        phase = "请求图片生成接口";
+        setTaskStatus(task, "生成中", attempt === 1
+          ? `${candidateText}正在上传参考图并生成四方连续图案。`
+          : `${candidateText}检测未通过，正在自动重新生成 ${attempt - 1}/${maxAutoRegenerations}。`, attempt === 1 ? 28 : 34);
 
-      phase = "显示成品预览";
-      setTaskStatus(task, "生成中", "正在准备 JPG 下载文件。", 72);
-      task.resultDataUrl = payload.image.dataUrl;
-      task.nodes.resultThumb.innerHTML = `<img src="${task.resultDataUrl}" alt="">`;
-      task.nodes.resultThumb.style.backgroundImage = "";
+        const payload = await requestGeneratedImage(task, lastCheck, attempt, candidateIndex, candidateCount);
 
-      phase = "导出目标 JPG";
-      task.resultJpgUrl = await makeJpg(task.resultDataUrl, makeTaskJpgOptions(task, {
-        enhance: els.autoEnhance.checked,
-        strength: getEnhanceStrength(),
-        repair: false,
-      }));
-      task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
+        phase = "显示成品预览";
+        setTaskStatus(task, "生成中", `${candidateText}正在准备 JPG 下载文件。`, 72);
+        task.resultDataUrl = payload.image.dataUrl;
+        task.nodes.resultThumb.innerHTML = `<img src="${task.resultDataUrl}" alt="">`;
+        task.nodes.resultThumb.style.backgroundImage = "";
 
-      phase = "严格四方循环质检";
-      setTaskStatus(task, "生成中", "正在做严格四方循环检查。", 90);
-      lastCheck = await runSeamCheck(task, true);
-      task.originalSeamCheck = task.originalSeamCheck || lastCheck;
+        phase = "导出目标 JPG";
+        task.resultJpgUrl = await makeJpg(task.resultDataUrl, makeTaskJpgOptions(task, {
+          enhance: els.autoEnhance.checked,
+          strength: getEnhanceStrength(),
+          repair: false,
+        }));
+        task.nodes.resultThumb.innerHTML = `<img src="${task.resultJpgUrl}" alt="">`;
 
-      if (lastCheck.passed) {
-        finalAction = task.generationMode === "fission" ? "fission" : "generate";
-        break;
-      }
+        phase = "严格四方循环质检";
+        setTaskStatus(task, "生成中", `${candidateText}正在做严格四方循环检查。`, 90);
+        lastCheck = await runSeamCheck(task, true);
+        task.originalSeamCheck = task.originalSeamCheck || lastCheck;
 
-      if (shouldPrintClarityEnhance(lastCheck)) {
-        phase = "印花清晰度增强";
-        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在做印花清晰度增强。`, 92);
-        const clarityCheck = await finishPrintClarityTask(task, { quiet: true });
-        lastCheck = clarityCheck || lastCheck;
         if (lastCheck.passed) {
-          finalAction = "enhance";
-          break;
+          finalAction = task.generationMode === "fission" ? "fission" : "generate";
+          break generationLoop;
+        }
+
+        if (shouldPrintClarityEnhance(lastCheck)) {
+          phase = "印花清晰度增强";
+          setTaskStatus(task, "生成中", `${candidateText}${seamFailureMessage(lastCheck)}，正在做印花清晰度增强。`, 92);
+          const clarityCheck = await finishPrintClarityTask(task, { quiet: true });
+          lastCheck = clarityCheck || lastCheck;
+          if (lastCheck.passed) {
+            finalAction = "enhance";
+            break generationLoop;
+          }
+        }
+
+        if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiInternalGuideRepair(lastCheck)) {
+          phase = "AI 内部导线修复";
+          setTaskStatus(task, "生成中", `${candidateText}${seamFailureMessage(lastCheck)}，正在让 AI 原位消除内部导线。`, 94);
+          const internalGuideRepairCheck = await improveWithAiInternalGuideRepair(task, lastCheck);
+          lastCheck = internalGuideRepairCheck || lastCheck;
+          if (lastCheck.passed) {
+            finalAction = "repair";
+            break generationLoop;
+          }
+        }
+
+        if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiOffsetRepair(lastCheck)) {
+          phase = "AI 丝滑过渡修缝";
+          setTaskStatus(task, "生成中", `${candidateText}${seamFailureMessage(lastCheck)}，正在让 AI 生成丝滑过渡。`, 94);
+          const aiRepairCheck = await improveWithAiOffsetRepair(task, lastCheck);
+          lastCheck = aiRepairCheck || lastCheck;
+          if (lastCheck.passed) {
+            finalAction = "repair";
+            break generationLoop;
+          }
+        }
+
+        if (shouldEdgeBlendRepair(lastCheck)) {
+          phase = "本地轻修复";
+          setTaskStatus(task, "生成中", `${candidateText}${seamFailureMessage(lastCheck)}，正在轻修并复检。`, 95);
+          const repairCheck = await repairTask(task, { quiet: true });
+          lastCheck = repairCheck || lastCheck;
+          if (lastCheck.passed) {
+            finalAction = "repair";
+            break generationLoop;
+          }
+        }
+
+        if (shouldForcePeriodicRepair(lastCheck)) {
+          phase = "强制四方连续处理";
+          setTaskStatus(task, "生成中", `${candidateText}${seamFailureMessage(lastCheck)}，正在做最后兜底处理。`, 96);
+          const forceCheck = await forceSeamlessTask(task, { quiet: true });
+          lastCheck = forceCheck || lastCheck;
+          if (lastCheck.passed) {
+            finalAction = "repair";
+            break generationLoop;
+          }
+        }
+
+        if (shouldTryCertifiedSeamlessFallback(lastCheck)) {
+          phase = "严格闭合候选";
+          setTaskStatus(task, "生成中", `${candidateText}${seamFailureMessage(lastCheck)}，正在尝试严格闭合候选。`, 96);
+          const fallback = await tryCertifiedSeamlessFallback(task, lastCheck);
+          if (fallback?.accepted) {
+            lastCheck = fallback.check;
+            finalAction = "repair";
+            break generationLoop;
+          }
+          if (fallback?.candidate) {
+            bestCandidate = rememberBestTaskCandidate(fallback.candidate, fallback.check, bestCandidate);
+            attemptBest = rememberBestTaskCandidate(fallback.candidate, fallback.check, attemptBest);
+          }
+        }
+
+        bestCandidate = rememberBestTaskCandidate(task, lastCheck, bestCandidate);
+        attemptBest = rememberBestTaskCandidate(task, lastCheck, attemptBest);
+        if (candidateIndex < candidateCount) {
+          setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，继续抽样下一个候选 ${candidateIndex + 1}/${candidateCount}。`, 96);
+          await delay(450);
         }
       }
 
-      if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiInternalGuideRepair(lastCheck)) {
-        phase = "AI 内部导线修复";
-        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在让 AI 原位消除内部导线。`, 94);
-        const internalGuideRepairCheck = await improveWithAiInternalGuideRepair(task, lastCheck);
-        lastCheck = internalGuideRepairCheck || lastCheck;
-        if (lastCheck.passed) {
-          finalAction = "repair";
-          break;
-        }
+      if (!lastCheck?.passed && attemptBest && isSeamCheckBetter(attemptBest.check, lastCheck)) {
+        restoreTaskCandidate(task, attemptBest);
+        lastCheck = attemptBest.check;
       }
 
-      if (task.aiRepairAttempts < maxAiSeamRepairs && shouldAiOffsetRepair(lastCheck)) {
-        phase = "AI 丝滑过渡修缝";
-        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在让 AI 生成丝滑过渡。`, 94);
-        const aiRepairCheck = await improveWithAiOffsetRepair(task, lastCheck);
-        lastCheck = aiRepairCheck || lastCheck;
-        if (lastCheck.passed) {
-          finalAction = "repair";
-          break;
-        }
-      }
-
-      if (shouldEdgeBlendRepair(lastCheck)) {
-        phase = "本地轻修复";
-        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在轻修并复检。`, 95);
-        const repairCheck = await repairTask(task, { quiet: true });
-        lastCheck = repairCheck || lastCheck;
-        if (lastCheck.passed) {
-          finalAction = "repair";
-          break;
-        }
-      }
-
-      if (shouldForcePeriodicRepair(lastCheck)) {
-        phase = "强制四方连续处理";
-        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在做最后兜底处理。`, 96);
-        const forceCheck = await forceSeamlessTask(task, { quiet: true });
-        lastCheck = forceCheck || lastCheck;
-        if (lastCheck.passed) {
-          finalAction = "repair";
-          break;
-        }
-      }
-
-      if (shouldTryCertifiedSeamlessFallback(lastCheck)) {
-        phase = "严格闭合候选";
-        setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，正在尝试严格闭合候选。`, 96);
-        const fallback = await tryCertifiedSeamlessFallback(task, lastCheck);
-        if (fallback?.accepted) {
-          lastCheck = fallback.check;
-          finalAction = "repair";
-          break;
-        }
-        if (fallback?.candidate) {
-          bestCandidate = rememberBestTaskCandidate(fallback.candidate, fallback.check, bestCandidate);
-        }
-      }
-
-      bestCandidate = rememberBestTaskCandidate(task, lastCheck, bestCandidate);
       task.autoRegenerated = true;
       if (attempt <= maxAutoRegenerations) {
         setTaskStatus(task, "生成中", `${seamFailureMessage(lastCheck)}，准备自动重生 ${attempt}/${maxAutoRegenerations}。`, 96);
@@ -1273,7 +1334,7 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
       updateTaskDownloadGate(task);
       await saveHistory(task, historyMarker, "review");
       await deleteQueuedTask(task.id);
-      setTaskStatus(task, "需人工复核", `${seamFailureMessage(lastCheck)}。已轻修 ${task.repairAttempts} 次、重生 ${Math.max(0, task.generationAttempts - 1)} 次；未通过认证前不开放成品下载。`, 100);
+      setTaskStatus(task, "需人工复核", `${seamFailureMessage(lastCheck)}。已抽样 ${task.generationCandidateSamples || task.generationAttempts} 张候选、轻修 ${task.repairAttempts} 次、重生 ${Math.max(0, task.generationAttempts - 1)} 轮；未通过认证前不开放成品下载。`, 100);
     }
   } catch (error) {
     const message = `${phase}失败：${error.message}`;
@@ -1286,14 +1347,16 @@ async function generateTask(task, historyMarker = createHistoryMarker(task?.gene
   }
 }
 
-async function requestGeneratedImage(task, previousCheck = null, attempt = 1) {
+async function requestGeneratedImage(task, previousCheck = null, attempt = 1, candidateIndex = 1, candidateCount = 1) {
   return await requestImageGeneration({
     image: {
       name: task.file.name,
       type: task.file.type,
       dataUrl: task.dataUrl,
     },
-    prompt: task.generationMode === "fission" ? buildFissionPrompt(task, previousCheck, attempt) : buildPrompt(previousCheck, attempt),
+    prompt: task.generationMode === "fission"
+      ? buildFissionPrompt(task, previousCheck, attempt, candidateIndex, candidateCount)
+      : buildPrompt(previousCheck, attempt, candidateIndex, candidateCount),
     size: els.size.value,
   }, {
     onPoll: (job) => {
@@ -2531,7 +2594,17 @@ function makeOffsetRepairJpg(dataUrl, check) {
   });
 }
 
-function makeEdgeBlendRepairJpg(dataUrl, check) {
+async function makeEdgeBlendRepairJpg(dataUrl, check) {
+  const baseJpg = await renderEdgeBlendRepairJpg(dataUrl, check, { toroidalLowFrequency: false });
+  const baseCheck = await checkSeamQuality(baseJpg, { skipPrintSpec: true });
+  if (baseCheck.passed) return baseJpg;
+
+  const toroidalJpg = await renderEdgeBlendRepairJpg(dataUrl, check, { toroidalLowFrequency: true });
+  const toroidalCheck = await checkSeamQuality(toroidalJpg, { skipPrintSpec: true });
+  return isSeamCheckBetter(toroidalCheck, baseCheck) ? toroidalJpg : baseJpg;
+}
+
+function renderEdgeBlendRepairJpg(dataUrl, check, options = {}) {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => {
@@ -2541,6 +2614,15 @@ function makeEdgeBlendRepairJpg(dataUrl, check) {
         canvas.height = image.height;
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        if (options.toroidalLowFrequency) {
+          const periodicBase = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          applyToroidalLowFrequencyCorrection(periodicBase.data, canvas.width, canvas.height, {
+            strength: 0.58,
+            bandRatio: 0.004,
+            smoothRatio: 0.012,
+          });
+          ctx.putImageData(periodicBase, 0, 0);
+        }
         repairSeams(ctx, canvas.width, canvas.height, {
           check,
           bandRatio: 0.019,
@@ -2593,6 +2675,67 @@ function makeStrictSeamlessJpg(dataUrl, check) {
     image.onerror = reject;
     image.src = dataUrl;
   });
+}
+
+function applyToroidalLowFrequencyCorrection(data, width, height, options = {}) {
+  const strength = options.strength ?? 0.55;
+  const band = Math.max(3, Math.min(24, Math.round(Math.min(width, height) * (options.bandRatio || 0.004))));
+  const smoothRadiusX = Math.max(4, Math.min(96, Math.round(width * (options.smoothRatio || 0.012))));
+  const smoothRadiusY = Math.max(4, Math.min(96, Math.round(height * (options.smoothRatio || 0.012))));
+  const horizontalDiff = smoothPeriodicDiff(measureOppositeBandDiff(data, width, height, band, "horizontal"), width, smoothRadiusX);
+  const verticalDiff = smoothPeriodicDiff(measureOppositeBandDiff(data, width, height, band, "vertical"), height, smoothRadiusY);
+
+  for (let y = 0; y < height; y += 1) {
+    const verticalWeight = (0.5 - y / Math.max(1, height - 1)) * strength;
+    for (let x = 0; x < width; x += 1) {
+      const horizontalWeight = (0.5 - x / Math.max(1, width - 1)) * strength;
+      const index = (y * width + x) * 4;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const h = horizontalDiff[x * 3 + channel] * verticalWeight;
+        const v = verticalDiff[y * 3 + channel] * horizontalWeight;
+        data[index + channel] = clamp(data[index + channel] + h + v);
+      }
+    }
+  }
+}
+
+function measureOppositeBandDiff(data, width, height, band, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const diff = new Float32Array(length * 3);
+
+  for (let along = 0; along < length; along += 1) {
+    for (let d = 0; d < band; d += 1) {
+      const a = periodicIndex(width, along, d, horizontal);
+      const b = periodicIndex(width, along, cross - 1 - d, horizontal);
+      for (let channel = 0; channel < 3; channel += 1) {
+        diff[along * 3 + channel] += data[b + channel] - data[a + channel];
+      }
+    }
+  }
+
+  for (let index = 0; index < diff.length; index += 1) {
+    diff[index] /= Math.max(1, band);
+  }
+  return diff;
+}
+
+function smoothPeriodicDiff(diff, length, radius) {
+  const smoothed = new Float32Array(diff.length);
+  const span = radius * 2 + 1;
+
+  for (let along = 0; along < length; along += 1) {
+    for (let channel = 0; channel < 3; channel += 1) {
+      let total = 0;
+      for (let offset = -radius; offset <= radius; offset += 1) {
+        const wrapped = wrapIndex(along + offset, length);
+        total += diff[wrapped * 3 + channel];
+      }
+      smoothed[along * 3 + channel] = total / span;
+    }
+  }
+  return smoothed;
 }
 
 function makeOffsetDataUrl(dataUrl, options = {}) {

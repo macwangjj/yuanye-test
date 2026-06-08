@@ -58,7 +58,7 @@ test("masked AI repair results are composited through the mask before use", () =
 });
 
 test("local repair now includes wide internal guide-line fusion", () => {
-  const edgeRepairSource = extractFunction(appSource, "makeEdgeBlendRepairJpg");
+  const edgeRepairSource = extractFunction(appSource, "renderEdgeBlendRepairJpg");
   const smoothSource = extractFunction(appSource, "smoothInternalGuideLines");
   const directionSource = extractFunction(appSource, "repairInternalGuideDirection");
   const junctionSource = extractFunction(appSource, "stabilizeInternalGuideJunctions");

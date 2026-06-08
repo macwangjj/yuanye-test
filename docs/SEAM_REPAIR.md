@@ -2,6 +2,16 @@
 
 This test build treats four-way repeat quality as a production requirement, not a cosmetic afterthought.
 
+## 0.7.67 Batch Yield Strategy
+
+The 80% target is treated as batch yield: for every image that ships, the same strict seamless and print gates still apply. This build improves yield by sampling multiple generation candidates per round and selecting the best scored candidate instead of accepting the first model output.
+
+- Each generation round now samples at least two differentiated candidates.
+- Structural seam failures and late retry rounds sample up to three candidates.
+- Candidate prompts explicitly vary the repeat strategy so the model does not keep returning the same failed composition.
+- Failed candidates are still scored by the same QA gates; the app keeps only the best candidate and never opens download unless a candidate passes certification.
+- Local seam repair now uses a candidate rollback path: experimental low-frequency toroidal correction is accepted only when it scores better than the baseline edge blend.
+
 ## Strategy
 
 1. Generate one repeat tile from the reference image.

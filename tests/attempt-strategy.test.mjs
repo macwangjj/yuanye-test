@@ -54,10 +54,11 @@ test("generation loop forwards attempt number into the image prompt", () => {
   const generateTaskSource = extractFunction(appSource, "generateTask");
   const requestGeneratedImageSource = extractFunction(appSource, "requestGeneratedImage");
 
-  assert.match(generateTaskSource, /requestGeneratedImage\(task, lastCheck, attempt\)/);
-  assert.match(requestGeneratedImageSource, /function requestGeneratedImage\(task, previousCheck = null, attempt = 1\)/);
-  assert.match(requestGeneratedImageSource, /buildPrompt\(previousCheck, attempt\)/);
-  assert.match(requestGeneratedImageSource, /buildFissionPrompt\(task, previousCheck, attempt\)/);
+  assert.match(generateTaskSource, /generationCandidateCountForAttempt\(attempt, lastCheck\)/);
+  assert.match(generateTaskSource, /requestGeneratedImage\(task, lastCheck, attempt, candidateIndex, candidateCount\)/);
+  assert.match(requestGeneratedImageSource, /function requestGeneratedImage\(task, previousCheck = null, attempt = 1, candidateIndex = 1, candidateCount = 1\)/);
+  assert.match(requestGeneratedImageSource, /buildPrompt\(previousCheck, attempt, candidateIndex, candidateCount\)/);
+  assert.match(requestGeneratedImageSource, /buildFissionPrompt\(task, previousCheck, attempt, candidateIndex, candidateCount\)/);
 });
 
 test("normal and fission prompt builders both include attempt-specific guidance", () => {
@@ -66,13 +67,40 @@ test("normal and fission prompt builders both include attempt-specific guidance"
   assert.equal(calls.length, 2, "normal generation and fission generation should both use attempt strategies");
 });
 
+test("structural seam retries sample more differentiated candidates", () => {
+  const { generationCandidateCountForAttempt, buildCandidateVariationGuidance } = loadAttemptStrategy();
+
+  assert.equal(generationCandidateCountForAttempt(1, null), 2);
+  assert.equal(generationCandidateCountForAttempt(2, { issues: ["横档未衔接，不可修复"] }), 3);
+  assert.equal(generationCandidateCountForAttempt(3, { issues: ["花型信息量不足，不可修复"] }), 3);
+
+  const guidance = buildCandidateVariationGuidance(2, 3, 2, { issues: ["四角平铺交汇明显，可修复"] });
+  assert.match(guidance, /第 2\/3 个候选/);
+  assert.match(guidance, /all-over 连续纹样/);
+  assert.match(guidance, /严格检测/);
+});
+
 function loadAttemptStrategy() {
   const source = [
     extractFunction(appSource, "collectQualityIssueText"),
     extractFunction(appSource, "isStructuralSeamIssue"),
     extractFunction(appSource, "buildAttemptStrategyGuidance"),
+    extractFunction(appSource, "generationCandidateCountForAttempt"),
+    extractFunction(appSource, "buildCandidateVariationGuidance"),
   ].join("\n");
-  return Function(`"use strict"; ${source}\nreturn { buildAttemptStrategyGuidance, collectQualityIssueText, isStructuralSeamIssue };`)();
+  return Function(`"use strict";
+    const maxAutoRegenerations = 3;
+    const generationCandidateSamplesBase = 2;
+    const generationCandidateSamplesMax = 3;
+    ${source}
+    return {
+      buildAttemptStrategyGuidance,
+      buildCandidateVariationGuidance,
+      collectQualityIssueText,
+      generationCandidateCountForAttempt,
+      isStructuralSeamIssue,
+    };
+  `)();
 }
 
 function extractFunction(source, name) {
