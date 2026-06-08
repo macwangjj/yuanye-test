@@ -384,6 +384,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Masked AI results are now composited back through the repair mask instead of replacing the full source image, so protected areas stay pixel-stable even if the upstream gateway returns a globally changed image.
 - If this original-coordinate repair does not improve the score, the candidate is rolled back and the existing Offset, local edge, or strict periodic fallbacks can continue.
 
+## 0.7.63 Wide Internal Guide Fusion
+
+- Local light repair now also runs an internal guide-line fusion pass after edge blending, so it can address candidates where the outer repeat is closed but 1/4, 1/3, 1/2, 2/3, or 3/4 guide seams remain visible.
+- The old single-line smoothing was replaced by a wider feathered band that blends across each internal guide line using stable texture sampled from both sides.
+- Internal guide intersections now get a small junction-stabilization pass that borrows diagonal texture detail, reducing hard dots or cross-shaped knots in tiled previews.
+- This gives the pipeline a deterministic fallback when masked AI protects the edges but does not actually remove internal grid marks.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

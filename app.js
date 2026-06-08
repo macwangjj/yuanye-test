@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.62-test";
+const clientVersion = "0.7.63-test";
 const generateJobCreateTimeoutMs = 30000;
 const generateJobPollTimeoutMs = 30000;
 const generateJobMaxWaitMs = 20 * 60 * 1000;
@@ -2461,6 +2461,9 @@ function makeEdgeBlendRepairJpg(dataUrl, check) {
           maxDiff: 126,
           textureMix: 0.74,
         });
+        const internalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        smoothInternalGuideLines(internalImageData.data, canvas.width, canvas.height, check);
+        ctx.putImageData(internalImageData, 0, 0);
         enhanceClarity(ctx, canvas.width, canvas.height, 0.12);
         const jpg = canvas.toDataURL("image/jpeg", 0.94);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出边缘融合 JPG。");
@@ -5550,30 +5553,40 @@ function smoothInternalGuideLines(data, width, height, check = null) {
   if (!needsHorizontal && !needsVertical) return;
 
   if (needsHorizontal) {
-    smoothInternalDirection(data, width, height, "horizontal");
+    repairInternalGuideDirection(data, width, height, "horizontal");
   }
   if (needsVertical) {
-    smoothInternalDirection(data, width, height, "vertical");
+    repairInternalGuideDirection(data, width, height, "vertical");
+  }
+  if (
+    check?.tiledCorner?.junctionRisk ||
+    (check?.tiledCorner?.worstScore || 0) > 10 ||
+    (needsHorizontal && needsVertical)
+  ) {
+    stabilizeInternalGuideJunctions(data, width, height);
   }
 }
 
-function smoothInternalDirection(data, width, height, direction) {
+function repairInternalGuideDirection(data, width, height, direction) {
   const horizontal = direction === "horizontal";
   const length = horizontal ? width : height;
   const cross = horizontal ? height : width;
   const ratios = [0.25, 1 / 3, 0.5, 2 / 3, 0.75];
-  const band = Math.max(8, Math.min(46, Math.round(cross * 0.006)));
+  const band = Math.max(10, Math.min(74, Math.round(cross * 0.014)));
+  const sampleOffset = Math.max(band * 3, Math.round(cross * 0.038));
+  const source = new Uint8ClampedArray(data);
 
   for (const ratio of ratios) {
     const center = Math.round(cross * ratio);
-    if (center <= band * 3 || center >= cross - band * 3) continue;
+    if (center <= sampleOffset + band || center >= cross - sampleOffset - band) continue;
 
     for (let delta = -band; delta <= band; delta += 1) {
       const position = center + delta;
       const t = Math.abs(delta) / Math.max(1, band);
-      const weight = Math.pow(1 - t, 1.8) * 0.42;
-      const before = Math.max(0, center - band * 2 - Math.abs(delta));
-      const after = Math.min(cross - 1, center + band * 2 + Math.abs(delta));
+      const weight = Math.pow(1 - t, 1.55) * 0.72;
+      const sideT = (delta + band) / Math.max(1, band * 2);
+      const before = Math.max(0, center - sampleOffset - Math.max(0, -delta));
+      const after = Math.min(cross - 1, center + sampleOffset + Math.max(0, delta));
 
       for (let along = 0; along < length; along += 1) {
         const x = horizontal ? along : position;
@@ -5585,14 +5598,108 @@ function smoothInternalDirection(data, width, height, direction) {
         const index = (y * width + x) * 4;
         const a = (ay * width + ax) * 4;
         const b = (by * width + bx) * 4;
+        const prevAlong = Math.max(0, along - 1);
+        const nextAlong = Math.min(length - 1, along + 1);
+        const aPrev = horizontal ? (ay * width + prevAlong) * 4 : (prevAlong * width + ax) * 4;
+        const aNext = horizontal ? (ay * width + nextAlong) * 4 : (nextAlong * width + ax) * 4;
+        const bPrev = horizontal ? (by * width + prevAlong) * 4 : (prevAlong * width + bx) * 4;
+        const bNext = horizontal ? (by * width + nextAlong) * 4 : (nextAlong * width + bx) * 4;
 
         for (let channel = 0; channel < 3; channel += 1) {
-          const target = (data[a + channel] + data[b + channel]) / 2;
-          data[index + channel] = Math.round(data[index + channel] * (1 - weight) + target * weight);
+          const gradientTarget = source[a + channel] * (1 - sideT) + source[b + channel] * sideT;
+          const detailA = source[a + channel] - (source[aPrev + channel] + source[aNext + channel]) / 2;
+          const detailB = source[b + channel] - (source[bPrev + channel] + source[bNext + channel]) / 2;
+          const target = gradientTarget + (detailA * (1 - sideT) + detailB * sideT) * 0.36;
+          data[index + channel] = clamp(data[index + channel] * (1 - weight) + target * weight);
+        }
+      }
+    }
+    featherInternalGuideTransition(data, source, width, height, center, band, Math.max(6, Math.round(band * 0.62)), direction);
+  }
+}
+
+function featherInternalGuideTransition(data, source, width, height, center, band, feather, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+
+  for (let delta = 0; delta < feather; delta += 1) {
+    const weight = Math.pow(1 - delta / Math.max(1, feather), 2) * 0.18;
+    const innerA = Math.max(0, center - band - 1 - delta);
+    const innerB = Math.min(cross - 1, center + band + 1 + delta);
+    const farA = Math.max(0, innerA - feather);
+    const farB = Math.min(cross - 1, innerB + feather);
+
+    for (let along = 0; along < length; along += 1) {
+      const ax = horizontal ? along : innerA;
+      const ay = horizontal ? innerA : along;
+      const bx = horizontal ? along : innerB;
+      const by = horizontal ? innerB : along;
+      const fax = horizontal ? along : farA;
+      const fay = horizontal ? farA : along;
+      const fbx = horizontal ? along : farB;
+      const fby = horizontal ? farB : along;
+      const a = (ay * width + ax) * 4;
+      const b = (by * width + bx) * 4;
+      const fa = (fay * width + fax) * 4;
+      const fb = (fby * width + fbx) * 4;
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        data[a + channel] = clamp(data[a + channel] * (1 - weight) + source[fa + channel] * weight);
+        data[b + channel] = clamp(data[b + channel] * (1 - weight) + source[fb + channel] * weight);
+      }
+    }
+  }
+}
+
+function stabilizeInternalGuideJunctions(data, width, height) {
+  const ratios = [0.25, 1 / 3, 0.5, 2 / 3, 0.75];
+  const source = new Uint8ClampedArray(data);
+  const size = Math.min(width, height);
+  const radius = Math.max(10, Math.min(82, Math.round(size * 0.018)));
+  const sampleOffset = Math.max(radius * 2, Math.round(size * 0.045));
+  const protectedEdgeX = width * 0.08;
+  const protectedEdgeY = height * 0.08;
+
+  for (const ratioY of ratios) {
+    const centerY = Math.round(height * ratioY);
+    if (centerY < protectedEdgeY || centerY > height - protectedEdgeY) continue;
+    for (const ratioX of ratios) {
+      const centerX = Math.round(width * ratioX);
+      if (centerX < protectedEdgeX || centerX > width - protectedEdgeX) continue;
+
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        const y = centerY + dy;
+        if (y <= 0 || y >= height - 1) continue;
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          const x = centerX + dx;
+          if (x <= 0 || x >= width - 1) continue;
+          const radial = Math.hypot(dx, dy) / Math.max(1, radius);
+          if (radial > 1) continue;
+          const weight = Math.pow(1 - radial, 1.4) * 0.58;
+          const samples = [
+            [clampCoord(x - sampleOffset, width), clampCoord(y - sampleOffset, height)],
+            [clampCoord(x + sampleOffset, width), clampCoord(y - sampleOffset, height)],
+            [clampCoord(x - sampleOffset, width), clampCoord(y + sampleOffset, height)],
+            [clampCoord(x + sampleOffset, width), clampCoord(y + sampleOffset, height)],
+          ];
+          const index = (y * width + x) * 4;
+          const sampleIndices = samples.map(([sx, sy]) => (sy * width + sx) * 4);
+
+          for (let channel = 0; channel < 3; channel += 1) {
+            const average = sampleIndices.reduce((sum, sampleIndex) => sum + source[sampleIndex + channel], 0) / sampleIndices.length;
+            const detail = sampleIndices.reduce((sum, sampleIndex) => sum + localDetailAt(source, width, height, sampleIndex, channel), 0) / sampleIndices.length;
+            const target = average + detail * 0.26;
+            data[index + channel] = clamp(data[index + channel] * (1 - weight) + target * weight);
+          }
         }
       }
     }
   }
+}
+
+function clampCoord(value, size) {
+  return Math.min(size - 1, Math.max(0, Math.round(value)));
 }
 
 function seamFeatherWeight(distance, band) {

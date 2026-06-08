@@ -57,6 +57,21 @@ test("masked AI repair results are composited through the mask before use", () =
   assert.match(offsetTaskSource, /makeOffsetDataUrl\(blendedOffsetDataUrl/);
 });
 
+test("local repair now includes wide internal guide-line fusion", () => {
+  const edgeRepairSource = extractFunction(appSource, "makeEdgeBlendRepairJpg");
+  const smoothSource = extractFunction(appSource, "smoothInternalGuideLines");
+  const directionSource = extractFunction(appSource, "repairInternalGuideDirection");
+  const junctionSource = extractFunction(appSource, "stabilizeInternalGuideJunctions");
+
+  assert.match(edgeRepairSource, /smoothInternalGuideLines\(internalImageData\.data, canvas\.width, canvas\.height, check\)/);
+  assert.match(smoothSource, /repairInternalGuideDirection\(data, width, height, "horizontal"\)/);
+  assert.match(smoothSource, /stabilizeInternalGuideJunctions\(data, width, height\)/);
+  assert.match(directionSource, /sampleOffset = Math\.max\(band \* 3/);
+  assert.match(directionSource, /featherInternalGuideTransition/);
+  assert.match(directionSource, /local detail|detailA|detailB/);
+  assert.match(junctionSource, /localDetailAt\(source, width, height/);
+});
+
 function extractFunction(source, name) {
   const start = Math.max(source.indexOf(`async function ${name}`), source.indexOf(`function ${name}`));
   assert.notEqual(start, -1, `${name} should exist`);
