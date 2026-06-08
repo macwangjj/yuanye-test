@@ -391,6 +391,13 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - Internal guide intersections now get a small junction-stabilization pass that borrows diagonal texture detail, reducing hard dots or cross-shaped knots in tiled previews.
 - This gives the pipeline a deterministic fallback when masked AI protects the edges but does not actually remove internal grid marks.
 
+## 0.7.64 Tiled Preview Seam Refinement
+
+- Local edge-blend repair now runs a tiled-preview refinement pass after internal guide fusion, targeting the actual artifacts that appear when the output is viewed as a 2x2 or 3x3 pattern.
+- The refinement stabilizes opposite closure bands, restores zero-mean edge texture, harmonizes near-edge halo bands, and softens activity spikes that otherwise become visible as horizontal or vertical bars after tiling.
+- Four-corner junction handling now includes texture restoration, reference-patch smoothing, spike softening, and a final corner-patch lock so the repeat intersection stays pixel-consistent before certification.
+- QA mode can run a staged repair pipeline check, reporting edge, internal-guide, raw-refine, and encoded-refine metrics separately so JPEG/export artifacts are not confused with the raw repair algorithm.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

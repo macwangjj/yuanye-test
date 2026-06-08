@@ -62,14 +62,21 @@ test("local repair now includes wide internal guide-line fusion", () => {
   const smoothSource = extractFunction(appSource, "smoothInternalGuideLines");
   const directionSource = extractFunction(appSource, "repairInternalGuideDirection");
   const junctionSource = extractFunction(appSource, "stabilizeInternalGuideJunctions");
+  const refineSource = extractFunction(appSource, "refineSeamForTiledPreview");
 
   assert.match(edgeRepairSource, /smoothInternalGuideLines\(internalImageData\.data, canvas\.width, canvas\.height, check\)/);
+  assert.match(edgeRepairSource, /refineSeamForTiledPreview\(internalImageData\.data, canvas\.width, canvas\.height, check\)/);
   assert.match(smoothSource, /repairInternalGuideDirection\(data, width, height, "horizontal"\)/);
   assert.match(smoothSource, /stabilizeInternalGuideJunctions\(data, width, height\)/);
-  assert.match(directionSource, /sampleOffset = Math\.max\(band \* 3/);
+  assert.match(directionSource, /coreBand = Math\.max\(18, Math\.min\(260, Math\.round\(cross \* 0\.031\)\)\)/);
+  assert.match(directionSource, /sampleOffset = Math\.max\(band \+ coreBand, Math\.round\(cross \* 0\.082\)\)/);
+  assert.match(directionSource, /plateauMix = Math\.pow\(coreT, 0\.74\)/);
   assert.match(directionSource, /featherInternalGuideTransition/);
   assert.match(directionSource, /local detail|detailA|detailB/);
   assert.match(junctionSource, /localDetailAt\(source, width, height/);
+  assert.match(refineSource, /harmonizeEdgeHaloBands\(data, width, height, "horizontal"\)/);
+  assert.match(refineSource, /smoothEdgeHaloActivity\(data, width, height, "vertical"\)/);
+  assert.match(refineSource, /lockTiledCornerPatch\(data, width, height\)/);
 });
 
 function extractFunction(source, name) {

@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.63-test";
+const clientVersion = "0.7.64-test";
 const generateJobCreateTimeoutMs = 30000;
 const generateJobPollTimeoutMs = 30000;
 const generateJobMaxWaitMs = 20 * 60 * 1000;
@@ -2404,7 +2404,7 @@ function makeJpg(dataUrl, options = {}) {
             }
           }
         }
-        const jpg = canvas.toDataURL("image/jpeg", 0.94);
+        const jpg = canvas.toDataURL("image/jpeg", 0.99);
         if (!jpg || jpg === "data:,") {
           throw new Error("浏览器无法导出目标尺寸 JPG，请尝试使用 Chrome 或降低批量数量后重试。");
         }
@@ -2430,7 +2430,7 @@ function makeOffsetRepairJpg(dataUrl, check) {
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         offsetRepairSeams(ctx, canvas.width, canvas.height, check);
         enhanceClarity(ctx, canvas.width, canvas.height, 0.12);
-        const jpg = canvas.toDataURL("image/jpeg", 0.94);
+        const jpg = canvas.toDataURL("image/jpeg", 0.99);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出 Offset 修复 JPG。");
         resolve(withJpegDpi(jpg, 300));
       } catch (error) {
@@ -2463,9 +2463,10 @@ function makeEdgeBlendRepairJpg(dataUrl, check) {
         });
         const internalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         smoothInternalGuideLines(internalImageData.data, canvas.width, canvas.height, check);
+        refineSeamForTiledPreview(internalImageData.data, canvas.width, canvas.height, check);
         ctx.putImageData(internalImageData, 0, 0);
         enhanceClarity(ctx, canvas.width, canvas.height, 0.12);
-        const jpg = canvas.toDataURL("image/jpeg", 0.94);
+        const jpg = canvas.toDataURL("image/jpeg", 0.99);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出边缘融合 JPG。");
         resolve(withJpegDpi(jpg, 300));
       } catch (error) {
@@ -2493,7 +2494,7 @@ function makeStrictSeamlessJpg(dataUrl, check) {
           forcePeriodicSeams(ctx, canvas.width, canvas.height, secondCheck);
         }
         enhanceClarity(ctx, canvas.width, canvas.height, 0.14);
-        const jpg = canvas.toDataURL("image/jpeg", 0.94);
+        const jpg = canvas.toDataURL("image/jpeg", 0.99);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出强制四方连续 JPG。");
         resolve(withJpegDpi(jpg, 300));
       } catch (error) {
@@ -2521,7 +2522,7 @@ function makeOffsetDataUrl(dataUrl, options = {}) {
           resolve(png);
           return;
         }
-        const jpg = canvas.toDataURL("image/jpeg", 0.95);
+        const jpg = canvas.toDataURL("image/jpeg", 0.99);
         if (!jpg || jpg === "data:,") throw new Error("浏览器无法导出 Offset 图片。");
         resolve(withJpegDpi(jpg, 300));
       } catch (error) {
@@ -3178,6 +3179,8 @@ function installQaTools() {
     buildInternalGuideRepairPrompt,
     makeOffsetRepairMaskDataUrl,
     makeInternalGuideRepairMaskDataUrl,
+    makeEdgeBlendRepairJpg,
+    makeStrictSeamlessJpg,
   });
 
   const output = document.createElement("pre");
@@ -3188,7 +3191,13 @@ function installQaTools() {
 
   const checkUrl = params.get("qaCheck");
   if (checkUrl) {
-    runQaCheck(checkUrl, params.get("qaMode") || "full", output);
+    if (params.get("qaRepair") === "pipeline") {
+      runQaRepairPipelineCheck(checkUrl, params.get("qaMode") || "full", output);
+    } else if (params.get("qaRepair") === "edge") {
+      runQaRepairCheck(checkUrl, params.get("qaMode") || "full", output);
+    } else {
+      runQaCheck(checkUrl, params.get("qaMode") || "full", output);
+    }
   }
 }
 
@@ -3205,6 +3214,96 @@ async function runQaCheck(url, mode, output) {
       error: error.message || String(error),
     }, null, 2);
   }
+}
+
+async function runQaRepairCheck(url, mode, output) {
+  output.textContent = JSON.stringify({ status: "repairing", mode, url }, null, 2);
+  try {
+    const before = await checkSeamQuality(url, { skipPrintSpec: mode === "structure" });
+    const repairedDataUrl = await makeEdgeBlendRepairJpg(url, before);
+    const after = await checkSeamQuality(repairedDataUrl, { skipPrintSpec: mode === "structure" });
+    output.textContent = JSON.stringify({
+      status: "done",
+      mode,
+      url,
+      repair: "edge",
+      before: compactQaCheck(before, { mode, url }),
+      after: compactQaCheck(after, { mode, url: "repaired-data-url" }),
+    }, null, 2);
+  } catch (error) {
+    output.textContent = JSON.stringify({
+      status: "error",
+      mode,
+      url,
+      repair: "edge",
+      error: error.message || String(error),
+    }, null, 2);
+  }
+}
+
+async function runQaRepairPipelineCheck(url, mode, output) {
+  output.textContent = JSON.stringify({ status: "repairing", mode, url, repair: "pipeline" }, null, 2);
+  try {
+    const skipPrintSpec = mode === "structure";
+    const before = await checkSeamQuality(url, { skipPrintSpec });
+    const image = await loadImageForCanvas(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    repairSeams(ctx, canvas.width, canvas.height, {
+      check: before,
+      bandRatio: 0.019,
+      minBand: 12,
+      maxBand: 72,
+      strength: 0.58,
+      maxDiff: 126,
+      textureMix: 0.74,
+    });
+    const afterEdge = await checkSeamQuality(canvas.toDataURL("image/jpeg", 0.99), { skipPrintSpec });
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    smoothInternalGuideLines(imageData.data, canvas.width, canvas.height, before);
+    ctx.putImageData(imageData, 0, 0);
+    const afterInternal = await checkSeamQuality(canvas.toDataURL("image/jpeg", 0.99), { skipPrintSpec });
+
+    const refinedData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    refineSeamForTiledPreview(refinedData.data, canvas.width, canvas.height, before);
+    ctx.putImageData(refinedData, 0, 0);
+    const rawAfterRefine = measureSeamQuality(ctx, canvas.width, canvas.height);
+    const afterRefine = await checkSeamQuality(withJpegDpi(canvas.toDataURL("image/jpeg", 0.99), 300), { skipPrintSpec });
+
+    output.textContent = JSON.stringify({
+      status: "done",
+      mode,
+      url,
+      repair: "pipeline",
+      before: compactQaCheck(before, { mode, url }),
+      afterEdge: compactQaCheck(afterEdge, { mode, url: "after-edge" }),
+      afterInternal: compactQaCheck(afterInternal, { mode, url: "after-internal" }),
+      rawAfterRefine: compactQaCheck(rawAfterRefine, { mode, url: "after-refine-raw-canvas" }),
+      afterRefine: compactQaCheck(afterRefine, { mode, url: "after-refine" }),
+    }, null, 2);
+  } catch (error) {
+    output.textContent = JSON.stringify({
+      status: "error",
+      mode,
+      url,
+      repair: "pipeline",
+      error: error.message || String(error),
+    }, null, 2);
+  }
+}
+
+function loadImageForCanvas(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
 }
 
 function compactQaCheck(check, context = {}) {
@@ -3258,6 +3357,12 @@ function compactQaCheck(check, context = {}) {
       borderObjectRisk: Boolean(check.borderHorizontal?.objectRisk || check.borderVertical?.objectRisk),
       driftRisk: Boolean(check.driftHorizontal?.driftRisk || check.driftVertical?.driftRisk),
     },
+    tiledCorner: check.tiledCorner || null,
+    tiledHorizontal: check.tiledHorizontal || null,
+    tiledVertical: check.tiledVertical || null,
+    bandHorizontal: check.bandHorizontal || null,
+    bandVertical: check.bandVertical || null,
+    outerFrame: check.outerFrame || null,
     summary: seamCheckSummary(check),
   };
 }
@@ -3773,6 +3878,10 @@ function measureEdgeBandArtifact(data, width, height, direction) {
   let worstScore = 0;
   let flatWindows = 0;
   let shiftWindows = 0;
+  let seamShiftSum = 0;
+  let bandShiftSum = 0;
+  let edgeActivitySum = 0;
+  let innerActivitySum = 0;
 
   for (let start = 0; start < length; start += windowStep) {
     const end = Math.min(length, start + windowSize);
@@ -3834,6 +3943,10 @@ function measureEdgeBandArtifact(data, width, height, direction) {
     const activityDrop = Math.max(0, innerActivity - edgeActivity);
     const stripScore = Math.max(0, bandShift - innerActivity * 0.2) * 0.52 + activityDrop * 0.95 + Math.max(0, seamShift - edgeActivity * 0.45) * 0.18;
 
+    seamShiftSum += seamShift;
+    bandShiftSum += bandShift;
+    edgeActivitySum += edgeActivity;
+    innerActivitySum += innerActivity;
     total += stripScore;
     count += 1;
     worstScore = Math.max(worstScore, stripScore);
@@ -3851,6 +3964,10 @@ function measureEdgeBandArtifact(data, width, height, direction) {
     shiftWindows,
     flatRatio,
     shiftRatio,
+    seamShift: seamShiftSum / Math.max(1, count),
+    bandShift: bandShiftSum / Math.max(1, count),
+    edgeActivity: edgeActivitySum / Math.max(1, count),
+    innerActivity: innerActivitySum / Math.max(1, count),
     bandRisk: (
       worstScore > 20 ||
       score > 12 ||
@@ -5404,6 +5521,7 @@ function forcePeriodicSeams(ctx, width, height, check = null) {
     stabilizePeriodicCorners(data, width, height, cornerBand);
   }
   smoothInternalGuideLines(data, width, height, check);
+  refineSeamForTiledPreview(data, width, height, check);
   ctx.putImageData(imageData, 0, 0);
 }
 
@@ -5419,6 +5537,235 @@ function shouldStabilizePeriodicCorners(check = null) {
     (check.tiledCorner?.worstScore || 0) > 12 ||
     ((check.horizontalScore || 0) > 7.4 && (check.verticalScore || 0) > 7.4)
   );
+}
+
+function shouldRefineSeamForTiledPreview(check = null) {
+  if (!check) return true;
+  const issueText = [
+    check.finalIssueType,
+    ...(Array.isArray(check.issues) ? check.issues : []),
+  ].filter(Boolean).join(" ");
+  return (
+    /四角平铺交汇|平铺边带|平铺预览中心线|画框留白边界|接缝过渡|最终JPG边缘硬线|横档|竖档|回头没接/.test(issueText) ||
+    check.tiledCorner?.junctionRisk ||
+    (check.tiledCorner?.worstScore || 0) > 10 ||
+    (check.tiledCorner?.score || 0) > 4.8 ||
+    check.bandHorizontal?.bandRisk ||
+    check.bandVertical?.bandRisk ||
+    check.outerFrame?.frameRisk ||
+    Math.max(check.tiledHorizontal?.score || 0, check.tiledVertical?.score || 0) > 6.2
+  );
+}
+
+function refineSeamForTiledPreview(data, width, height, check = null) {
+  if (!shouldRefineSeamForTiledPreview(check)) return;
+
+  stabilizeEdgeClosureBands(data, width, height, "horizontal");
+  stabilizeEdgeClosureBands(data, width, height, "vertical");
+  restoreEdgeZeroMeanTexture(data, width, height, "horizontal");
+  restoreEdgeZeroMeanTexture(data, width, height, "vertical");
+  harmonizeEdgeHaloBands(data, width, height, "horizontal");
+  harmonizeEdgeHaloBands(data, width, height, "vertical");
+  smoothEdgeHaloActivity(data, width, height, "horizontal");
+  smoothEdgeHaloActivity(data, width, height, "vertical");
+
+  if (shouldStabilizePeriodicCorners(check)) {
+    const cornerBand = Math.max(48, Math.min(250, Math.round(Math.min(width, height) * 0.05)));
+    stabilizePeriodicCorners(data, width, height, cornerBand);
+    restoreTiledCornerActivity(data, width, height);
+    smoothTiledCornerReferencePatches(data, width, height);
+    softenTiledCornerSpikes(data, width, height);
+    lockTiledCornerPatch(data, width, height);
+  }
+}
+
+function stabilizeEdgeClosureBands(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const size = Math.min(width, height);
+  const band = Math.max(32, Math.min(320, Math.round(size * 0.062)));
+  const sampleOffset = Math.max(96, Math.round(cross * 0.045));
+  const source = new Uint8ClampedArray(data);
+
+  for (let d = 0; d < band; d += 1) {
+    const weight = seamFeatherWeight(d, band) * 0.94;
+    const aCross = d;
+    const bCross = cross - 1 - d;
+    const innerA = Math.min(cross - 1, d + sampleOffset);
+    const innerB = Math.max(0, cross - 1 - d - sampleOffset);
+
+    for (let along = 0; along < length; along += 1) {
+      const a = periodicIndex(width, along, aCross, horizontal);
+      const b = periodicIndex(width, along, bCross, horizontal);
+      const ia = periodicIndex(width, along, innerA, horizontal);
+      const ib = periodicIndex(width, along, innerB, horizontal);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const edgeAverage = (source[a + channel] + source[b + channel]) / 2;
+        const innerAverage = (source[ia + channel] + source[ib + channel]) / 2;
+        const target = edgeAverage * 0.16 + innerAverage * 0.84;
+        data[a + channel] = clamp(data[a + channel] * (1 - weight) + target * weight);
+        data[b + channel] = clamp(data[b + channel] * (1 - weight) + target * weight);
+      }
+    }
+  }
+}
+
+function restoreEdgeZeroMeanTexture(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const size = Math.min(width, height);
+  const band = Math.max(32, Math.min(320, Math.round(size * 0.062)));
+  const sampleOffset = Math.max(96, Math.round(cross * 0.045));
+  const sampleStep = Math.max(6, Math.min(34, Math.round(size * 0.0068)));
+  const source = new Uint8ClampedArray(data);
+
+  for (let d = 0; d < band; d += 1) {
+    const textureWeight = (0.34 + 0.66 * Math.pow(1 - d / Math.max(1, band), 1.15)) * 0.72;
+    const aCross = d;
+    const bCross = cross - 1 - d;
+    const innerA = Math.min(cross - 1, d + sampleOffset);
+    const innerB = Math.max(0, cross - 1 - d - sampleOffset);
+    const mean = [0, 0, 0];
+
+    for (let along = 0; along < length; along += 1) {
+      const details = edgeTextureDetail(source, width, length, cross, along, innerA, innerB, sampleStep, horizontal);
+      mean[0] += details[0];
+      mean[1] += details[1];
+      mean[2] += details[2];
+    }
+    mean[0] /= Math.max(1, length);
+    mean[1] /= Math.max(1, length);
+    mean[2] /= Math.max(1, length);
+
+    for (let along = 0; along < length; along += 1) {
+      const a = periodicIndex(width, along, aCross, horizontal);
+      const b = periodicIndex(width, along, bCross, horizontal);
+      const details = edgeTextureDetail(source, width, length, cross, along, innerA, innerB, sampleStep, horizontal);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const detail = details[channel] - mean[channel] * 0.7;
+        data[a + channel] = clamp(data[a + channel] + detail * textureWeight);
+        data[b + channel] = clamp(data[b + channel] + detail * textureWeight);
+      }
+    }
+  }
+}
+
+function edgeTextureDetail(source, width, length, cross, along, innerA, innerB, sampleStep, horizontal) {
+  const prevAlong = clampCoord(along - sampleStep, length);
+  const nextAlong = clampCoord(along + sampleStep, length);
+  const prevA = clampCoord(innerA - sampleStep, cross);
+  const nextA = clampCoord(innerA + sampleStep, cross);
+  const prevB = clampCoord(innerB - sampleStep, cross);
+  const nextB = clampCoord(innerB + sampleStep, cross);
+  const ia = periodicIndex(width, along, innerA, horizontal);
+  const ib = periodicIndex(width, along, innerB, horizontal);
+  const blurA = [
+    periodicIndex(width, along, prevA, horizontal),
+    periodicIndex(width, along, nextA, horizontal),
+    periodicIndex(width, prevAlong, innerA, horizontal),
+    periodicIndex(width, nextAlong, innerA, horizontal),
+  ];
+  const blurB = [
+    periodicIndex(width, along, prevB, horizontal),
+    periodicIndex(width, along, nextB, horizontal),
+    periodicIndex(width, prevAlong, innerB, horizontal),
+    periodicIndex(width, nextAlong, innerB, horizontal),
+  ];
+  const detail = [0, 0, 0];
+
+  for (let channel = 0; channel < 3; channel += 1) {
+    const averageA = blurA.reduce((sum, index) => sum + source[index + channel], 0) / blurA.length;
+    const averageB = blurB.reduce((sum, index) => sum + source[index + channel], 0) / blurB.length;
+    detail[channel] = ((source[ia + channel] - averageA) + (source[ib + channel] - averageB)) / 2;
+  }
+  return detail;
+}
+
+function harmonizeEdgeHaloBands(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const depth = Math.max(8, Math.min(38, Math.round(cross * 0.014)));
+  const innerGap = Math.max(depth * 3, Math.round(cross * 0.04));
+  const source = new Uint8ClampedArray(data);
+
+  for (let d = 0; d < depth; d += 1) {
+    const edgeWeight = Math.pow(1 - d / Math.max(1, depth), 1.25) * 0.08;
+    const haloWeight = 0.52 + Math.pow(1 - d / Math.max(1, depth), 1.05) * 0.42;
+    const aCross = d;
+    const bCross = cross - 1 - d;
+    const haloA = Math.min(cross - 1, d + innerGap);
+    const haloB = Math.max(0, cross - 1 - d - innerGap);
+
+    for (let along = 0; along < length; along += 1) {
+      const a = periodicIndex(width, along, aCross, horizontal);
+      const b = periodicIndex(width, along, bCross, horizontal);
+      const ha = periodicIndex(width, along, haloA, horizontal);
+      const hb = periodicIndex(width, along, haloB, horizontal);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const edgeAverage = (source[a + channel] + source[b + channel]) / 2;
+        const haloAverage = (source[ha + channel] + source[hb + channel]) / 2;
+        const target = edgeAverage * 0.82 + haloAverage * 0.18;
+        data[a + channel] = clamp(data[a + channel] * (1 - edgeWeight) + target * edgeWeight);
+        data[b + channel] = clamp(data[b + channel] * (1 - edgeWeight) + target * edgeWeight);
+        data[ha + channel] = clamp(data[ha + channel] * (1 - haloWeight) + target * haloWeight);
+        data[hb + channel] = clamp(data[hb + channel] * (1 - haloWeight) + target * haloWeight);
+      }
+    }
+  }
+}
+
+function smoothEdgeHaloActivity(data, width, height, direction) {
+  const horizontal = direction === "horizontal";
+  const length = horizontal ? width : height;
+  const cross = horizontal ? height : width;
+  const depth = Math.max(8, Math.min(38, Math.round(cross * 0.014)));
+  const innerGap = Math.max(depth * 3, Math.round(cross * 0.04));
+  const sampleStep = Math.max(2, Math.min(8, Math.round(Math.min(width, height) * 0.0015)));
+  const source = new Uint8ClampedArray(data);
+
+  for (let d = 0; d < depth; d += 1) {
+    const edgeWeight = Math.pow(1 - d / Math.max(1, depth), 1.2) * 0.42;
+    const haloWeight = Math.pow(1 - d / Math.max(1, depth), 1.05) * 0.08;
+    const pairs = [
+      [d, edgeWeight],
+      [cross - 1 - d, edgeWeight],
+      [Math.min(cross - 1, d + innerGap), haloWeight],
+      [Math.max(0, cross - 1 - d - innerGap), haloWeight],
+    ];
+
+    for (const [crossPos, weight] of pairs) {
+      if (weight <= 0) continue;
+      for (let along = 0; along < length; along += 1) {
+        const center = periodicIndex(width, along, crossPos, horizontal);
+        const prevAlong = periodicIndex(width, clampCoord(along - sampleStep, length), crossPos, horizontal);
+        const nextAlong = periodicIndex(width, clampCoord(along + sampleStep, length), crossPos, horizontal);
+        const prevCross = periodicIndex(width, along, clampCoord(crossPos - sampleStep, cross), horizontal);
+        const nextCross = periodicIndex(width, along, clampCoord(crossPos + sampleStep, cross), horizontal);
+
+        for (let channel = 0; channel < 3; channel += 1) {
+          const blur = (
+            source[prevAlong + channel] +
+            source[nextAlong + channel] +
+            source[prevCross + channel] +
+            source[nextCross + channel]
+          ) / 4;
+          data[center + channel] = clamp(data[center + channel] * (1 - weight) + blur * weight);
+        }
+      }
+    }
+  }
+}
+
+function periodicIndex(width, along, cross, horizontal) {
+  const x = horizontal ? along : cross;
+  const y = horizontal ? cross : along;
+  return (y * width + x) * 4;
 }
 
 function lockOppositeBands(data, width, height, band, direction) {
@@ -5487,6 +5834,165 @@ function stabilizePeriodicCorners(data, width, height, band) {
 
         for (const index of indices) {
           data[index + channel] = Math.round(data[index + channel] * (1 - weight) + target * weight);
+        }
+      }
+    }
+  }
+}
+
+function restoreTiledCornerActivity(data, width, height) {
+  const source = new Uint8ClampedArray(data);
+  const size = Math.min(width, height);
+  const radius = Math.max(32, Math.min(250, Math.round(size * 0.05)));
+  const innerOffset = Math.max(Math.round(size * 0.046), Math.round(radius * 0.82));
+  const sampleStep = Math.max(8, Math.min(56, Math.round(size * 0.011)));
+  const lowMix = 0.04;
+  const detailAmount = 1.55;
+  const meanPull = 0.58;
+
+  for (let y = 0; y < radius; y += 1) {
+    for (let x = 0; x < radius; x += 1) {
+      const radial = Math.hypot(x, y) / Math.max(1, radius);
+      if (radial > 1) continue;
+      const weight = (0.12 + 0.88 * Math.pow(1 - radial, 1.08));
+      const points = [
+        [x, y],
+        [width - 1 - x, y],
+        [x, height - 1 - y],
+        [width - 1 - x, height - 1 - y],
+      ];
+      const innerPoints = [
+        [Math.min(width - 1, x + innerOffset), Math.min(height - 1, y + innerOffset), 1, 1],
+        [Math.max(0, width - 1 - x - innerOffset), Math.min(height - 1, y + innerOffset), -1, 1],
+        [Math.min(width - 1, x + innerOffset), Math.max(0, height - 1 - y - innerOffset), 1, -1],
+        [Math.max(0, width - 1 - x - innerOffset), Math.max(0, height - 1 - y - innerOffset), -1, -1],
+      ];
+      const pointIndices = points.map(([px, py]) => (py * width + px) * 4);
+      const innerIndices = innerPoints.map(([px, py]) => (py * width + px) * 4);
+      const blurIndices = innerPoints.map(([px, py, sx, sy]) => [
+        (clampCoord(py + sy * sampleStep, height) * width + clampCoord(px + sx * sampleStep, width)) * 4,
+        (clampCoord(py - sy * sampleStep, height) * width + clampCoord(px - sx * sampleStep, width)) * 4,
+        (py * width + clampCoord(px + sx * sampleStep, width)) * 4,
+        (clampCoord(py + sy * sampleStep, height) * width + px) * 4,
+      ]);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const current = pointIndices.reduce((sum, index) => sum + source[index + channel], 0) / pointIndices.length;
+        const inner = innerIndices.reduce((sum, index) => sum + source[index + channel], 0) / innerIndices.length;
+        const blur = blurIndices.reduce((sum, indices) => {
+          return sum + indices.reduce((innerSum, index) => innerSum + source[index + channel], 0) / indices.length;
+        }, 0) / blurIndices.length;
+        const detail = inner - blur;
+        const rawTarget = current * (1 - lowMix) + inner * lowMix + detail * detailAmount;
+        const target = rawTarget + (current - rawTarget) * meanPull;
+
+        for (const index of pointIndices) {
+          data[index + channel] = clamp(data[index + channel] * (1 - weight) + target * weight);
+        }
+      }
+    }
+  }
+}
+
+function smoothTiledCornerReferencePatches(data, width, height) {
+  const source = new Uint8ClampedArray(data);
+  const size = Math.min(width, height);
+  const center = Math.max(20, Math.round(size * 0.0645));
+  const radius = Math.max(18, Math.min(130, Math.round(size * 0.026)));
+  const sampleStep = Math.max(6, Math.min(20, Math.round(size * 0.0036)));
+  const strength = 0.36;
+  const centers = [
+    [center, center],
+    [width - 1 - center, center],
+    [center, height - 1 - center],
+    [width - 1 - center, height - 1 - center],
+  ];
+
+  for (const [cx, cy] of centers) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      const y = clampCoord(cy + dy, height);
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const x = clampCoord(cx + dx, width);
+        const radial = Math.hypot(dx, dy) / Math.max(1, radius);
+        if (radial > 1) continue;
+        const weight = Math.pow(1 - radial, 1.35) * strength;
+        const index = (y * width + x) * 4;
+        const sampleIndices = [
+          (clampCoord(y + sampleStep, height) * width + x) * 4,
+          (clampCoord(y - sampleStep, height) * width + x) * 4,
+          (y * width + clampCoord(x + sampleStep, width)) * 4,
+          (y * width + clampCoord(x - sampleStep, width)) * 4,
+        ];
+
+        for (let channel = 0; channel < 3; channel += 1) {
+          const blur = sampleIndices.reduce((sum, sampleIndex) => sum + source[sampleIndex + channel], 0) / sampleIndices.length;
+          data[index + channel] = clamp(data[index + channel] * (1 - weight) + blur * weight);
+        }
+      }
+    }
+  }
+}
+
+function softenTiledCornerSpikes(data, width, height) {
+  const source = new Uint8ClampedArray(data);
+  const size = Math.min(width, height);
+  const radius = Math.max(28, Math.min(82, Math.round(size * 0.016)));
+  const sampleStep = Math.max(3, Math.min(10, Math.round(size * 0.002)));
+
+  for (let y = 0; y < radius; y += 1) {
+    for (let x = 0; x < radius; x += 1) {
+      const radial = Math.hypot(x, y) / Math.max(1, radius);
+      if (radial > 1) continue;
+      const weight = Math.pow(1 - radial, 1.25) * 0.24;
+      const points = [
+        [x, y],
+        [width - 1 - x, y],
+        [x, height - 1 - y],
+        [width - 1 - x, height - 1 - y],
+      ];
+      const pointIndices = points.map(([px, py]) => (py * width + px) * 4);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const cornerAverage = pointIndices.reduce((sum, index) => sum + source[index + channel], 0) / pointIndices.length;
+
+        for (const [pointOffset, [px, py]] of points.entries()) {
+          const index = pointIndices[pointOffset];
+          const samples = [
+            (clampCoord(py + sampleStep, height) * width + px) * 4,
+            (clampCoord(py - sampleStep, height) * width + px) * 4,
+            (py * width + clampCoord(px + sampleStep, width)) * 4,
+            (py * width + clampCoord(px - sampleStep, width)) * 4,
+          ];
+          const blur = samples.reduce((sum, sampleIndex) => sum + source[sampleIndex + channel], 0) / samples.length;
+          const target = blur * 0.68 + cornerAverage * 0.32;
+          data[index + channel] = clamp(data[index + channel] * (1 - weight) + target * weight);
+        }
+      }
+    }
+  }
+}
+
+function lockTiledCornerPatch(data, width, height) {
+  const source = new Uint8ClampedArray(data);
+  const size = Math.min(width, height);
+  const seamBand = Math.max(10, Math.min(42, Math.round(size * 0.035)));
+  const patch = Math.max(8, Math.round(seamBand * 1.4));
+
+  for (let y = 0; y < patch; y += 1) {
+    for (let x = 0; x < patch; x += 1) {
+      const points = [
+        [x, y],
+        [width - patch + x, y],
+        [x, height - patch + y],
+        [width - patch + x, height - patch + y],
+      ];
+      const indices = points.map(([px, py]) => (py * width + px) * 4);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        const average = indices.reduce((sum, index) => sum + source[index + channel], 0) / indices.length;
+
+        for (const index of indices) {
+          data[index + channel] = clamp(average);
         }
       }
     }
@@ -5572,18 +6078,24 @@ function repairInternalGuideDirection(data, width, height, direction) {
   const length = horizontal ? width : height;
   const cross = horizontal ? height : width;
   const ratios = [0.25, 1 / 3, 0.5, 2 / 3, 0.75];
-  const band = Math.max(10, Math.min(74, Math.round(cross * 0.014)));
-  const sampleOffset = Math.max(band * 3, Math.round(cross * 0.038));
+  const band = Math.max(32, Math.min(520, Math.round(cross * 0.066)));
+  const coreBand = Math.max(18, Math.min(260, Math.round(cross * 0.031)));
+  const sampleOffset = Math.max(band + coreBand, Math.round(cross * 0.082));
   const source = new Uint8ClampedArray(data);
 
   for (const ratio of ratios) {
     const center = Math.round(cross * ratio);
     if (center <= sampleOffset + band || center >= cross - sampleOffset - band) continue;
+    const plateauBefore = Math.max(0, center - sampleOffset);
+    const plateauAfter = Math.min(cross - 1, center + sampleOffset);
 
     for (let delta = -band; delta <= band; delta += 1) {
       const position = center + delta;
-      const t = Math.abs(delta) / Math.max(1, band);
-      const weight = Math.pow(1 - t, 1.55) * 0.72;
+      const absDelta = Math.abs(delta);
+      const t = absDelta / Math.max(1, band);
+      const coreT = absDelta <= coreBand ? 1 : Math.max(0, 1 - (absDelta - coreBand) / Math.max(1, band - coreBand));
+      const weight = absDelta <= coreBand ? 0.97 : Math.pow(1 - t, 1.38) * 0.88;
+      const plateauMix = Math.pow(coreT, 0.74);
       const sideT = (delta + band) / Math.max(1, band * 2);
       const before = Math.max(0, center - sampleOffset - Math.max(0, -delta));
       const after = Math.min(cross - 1, center + sampleOffset + Math.max(0, delta));
@@ -5604,17 +6116,34 @@ function repairInternalGuideDirection(data, width, height, direction) {
         const aNext = horizontal ? (ay * width + nextAlong) * 4 : (nextAlong * width + ax) * 4;
         const bPrev = horizontal ? (by * width + prevAlong) * 4 : (prevAlong * width + bx) * 4;
         const bNext = horizontal ? (by * width + nextAlong) * 4 : (nextAlong * width + bx) * 4;
+        const pax = horizontal ? along : plateauBefore;
+        const pay = horizontal ? plateauBefore : along;
+        const pbx = horizontal ? along : plateauAfter;
+        const pby = horizontal ? plateauAfter : along;
+        const pa = (pay * width + pax) * 4;
+        const pb = (pby * width + pbx) * 4;
+        const paPrev = horizontal ? (pay * width + prevAlong) * 4 : (prevAlong * width + pax) * 4;
+        const paNext = horizontal ? (pay * width + nextAlong) * 4 : (nextAlong * width + pax) * 4;
+        const pbPrev = horizontal ? (pby * width + prevAlong) * 4 : (prevAlong * width + pbx) * 4;
+        const pbNext = horizontal ? (pby * width + nextAlong) * 4 : (nextAlong * width + pbx) * 4;
 
         for (let channel = 0; channel < 3; channel += 1) {
           const gradientTarget = source[a + channel] * (1 - sideT) + source[b + channel] * sideT;
+          const plateauTarget = (source[pa + channel] + source[pb + channel]) / 2;
           const detailA = source[a + channel] - (source[aPrev + channel] + source[aNext + channel]) / 2;
           const detailB = source[b + channel] - (source[bPrev + channel] + source[bNext + channel]) / 2;
-          const target = gradientTarget + (detailA * (1 - sideT) + detailB * sideT) * 0.36;
+          const plateauDetailA = source[pa + channel] - (source[paPrev + channel] + source[paNext + channel]) / 2;
+          const plateauDetailB = source[pb + channel] - (source[pbPrev + channel] + source[pbNext + channel]) / 2;
+          const gradientDetail = detailA * (1 - sideT) + detailB * sideT;
+          const plateauDetail = (plateauDetailA + plateauDetailB) / 2;
+          const baseTarget = gradientTarget * (1 - plateauMix) + plateauTarget * plateauMix;
+          const textureDetail = gradientDetail * (1 - plateauMix) + plateauDetail * plateauMix;
+          const target = baseTarget + textureDetail * 0.38;
           data[index + channel] = clamp(data[index + channel] * (1 - weight) + target * weight);
         }
       }
     }
-    featherInternalGuideTransition(data, source, width, height, center, band, Math.max(6, Math.round(band * 0.62)), direction);
+    featherInternalGuideTransition(data, source, width, height, center, band, Math.max(18, Math.round(band * 0.48)), direction);
   }
 }
 
@@ -5700,6 +6229,10 @@ function stabilizeInternalGuideJunctions(data, width, height) {
 
 function clampCoord(value, size) {
   return Math.min(size - 1, Math.max(0, Math.round(value)));
+}
+
+function clamp(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
 }
 
 function seamFeatherWeight(distance, band) {
