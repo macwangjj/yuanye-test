@@ -41,6 +41,17 @@ test("QA check output keeps structure mode separate from commercial certificatio
   assert.match(appSource, /summary: seamCheckSummary\(check\)/);
 });
 
+test("QA repair pipeline can vary JPEG quality for diagnostics only", () => {
+  const runQaRepairPipelineCheck = extractFunction(appSource, "runQaRepairPipelineCheck");
+  const getQaJpegQuality = extractFunction(appSource, "getQaJpegQuality");
+
+  assert.match(runQaRepairPipelineCheck, /const jpegQuality = getQaJpegQuality\(\)/);
+  assert.match(runQaRepairPipelineCheck, /toDataURL\("image\/jpeg", jpegQuality\)/);
+  assert.match(runQaRepairPipelineCheck, /jpegQuality,/);
+  assert.match(getQaJpegQuality, /qaJpegQuality/);
+  assert.match(getQaJpegQuality, /Math\.max\(0\.75, Math\.min\(1, value\)\)/);
+});
+
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}`);
   assert.notEqual(start, -1, `${name} should exist`);

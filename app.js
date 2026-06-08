@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.64-test";
+const clientVersion = "0.7.65-test";
 const generateJobCreateTimeoutMs = 30000;
 const generateJobPollTimeoutMs = 30000;
 const generateJobMaxWaitMs = 20 * 60 * 1000;
@@ -3245,6 +3245,7 @@ async function runQaRepairPipelineCheck(url, mode, output) {
   output.textContent = JSON.stringify({ status: "repairing", mode, url, repair: "pipeline" }, null, 2);
   try {
     const skipPrintSpec = mode === "structure";
+    const jpegQuality = getQaJpegQuality();
     const before = await checkSeamQuality(url, { skipPrintSpec });
     const image = await loadImageForCanvas(url);
     const canvas = document.createElement("canvas");
@@ -3262,24 +3263,25 @@ async function runQaRepairPipelineCheck(url, mode, output) {
       maxDiff: 126,
       textureMix: 0.74,
     });
-    const afterEdge = await checkSeamQuality(canvas.toDataURL("image/jpeg", 0.99), { skipPrintSpec });
+    const afterEdge = await checkSeamQuality(canvas.toDataURL("image/jpeg", jpegQuality), { skipPrintSpec });
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     smoothInternalGuideLines(imageData.data, canvas.width, canvas.height, before);
     ctx.putImageData(imageData, 0, 0);
-    const afterInternal = await checkSeamQuality(canvas.toDataURL("image/jpeg", 0.99), { skipPrintSpec });
+    const afterInternal = await checkSeamQuality(canvas.toDataURL("image/jpeg", jpegQuality), { skipPrintSpec });
 
     const refinedData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     refineSeamForTiledPreview(refinedData.data, canvas.width, canvas.height, before);
     ctx.putImageData(refinedData, 0, 0);
     const rawAfterRefine = measureSeamQuality(ctx, canvas.width, canvas.height);
-    const afterRefine = await checkSeamQuality(withJpegDpi(canvas.toDataURL("image/jpeg", 0.99), 300), { skipPrintSpec });
+    const afterRefine = await checkSeamQuality(withJpegDpi(canvas.toDataURL("image/jpeg", jpegQuality), 300), { skipPrintSpec });
 
     output.textContent = JSON.stringify({
       status: "done",
       mode,
       url,
       repair: "pipeline",
+      jpegQuality,
       before: compactQaCheck(before, { mode, url }),
       afterEdge: compactQaCheck(afterEdge, { mode, url: "after-edge" }),
       afterInternal: compactQaCheck(afterInternal, { mode, url: "after-internal" }),
@@ -3304,6 +3306,12 @@ function loadImageForCanvas(url) {
     image.onerror = reject;
     image.src = url;
   });
+}
+
+function getQaJpegQuality() {
+  const value = Number(new URLSearchParams(window.location.search).get("qaJpegQuality") || 0.99);
+  if (!Number.isFinite(value)) return 0.99;
+  return Math.max(0.75, Math.min(1, value));
 }
 
 function compactQaCheck(check, context = {}) {
