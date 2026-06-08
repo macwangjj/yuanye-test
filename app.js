@@ -30,7 +30,7 @@ const downloadedStorageKey = "yuanyeDownloaded";
 const queueDbName = "yuanyeQueue";
 const queueStoreName = "tasks";
 const selectedDownloads = new Map();
-const clientVersion = "0.7.65-test";
+const clientVersion = "0.7.66-test";
 const generateJobCreateTimeoutMs = 30000;
 const generateJobPollTimeoutMs = 30000;
 const generateJobMaxWaitMs = 20 * 60 * 1000;
@@ -1778,6 +1778,95 @@ async function aiOffsetRepairTask(task, previousCheck) {
   return check;
 }
 
+async function makeQaAiInternalGuideRepairJpg(dataUrl, previousCheck, options = {}) {
+  const repairSourceUrl = await prepareAiRepairSourceDataUrl(dataUrl, options);
+  const maskDataUrl = await makeInternalGuideRepairMaskDataUrl(repairSourceUrl);
+  const payload = await requestImageGeneration({
+    image: {
+      name: "qa-internal-guide-repair.png",
+      type: "image/png",
+      dataUrl: repairSourceUrl,
+    },
+    mask: {
+      name: "qa-internal-guide-mask.png",
+      type: "image/png",
+      dataUrl: maskDataUrl,
+    },
+    prompt: buildInternalGuideRepairPrompt(previousCheck),
+    size: options.size || els.size?.value || "1024x1536",
+  });
+
+  const blended = await blendMaskedRepairDataUrl(repairSourceUrl, payload.image.dataUrl, maskDataUrl, { strength: 1.28 });
+  return await makeJpg(blended, {
+    enhance: shouldPrintClarityEnhance(previousCheck),
+    strength: Math.max(getEnhanceStrength(), 0.28),
+    repair: false,
+  });
+}
+
+async function makeQaAiOffsetRepairJpg(dataUrl, previousCheck, options = {}) {
+  const repairSourceUrl = await prepareAiRepairSourceDataUrl(dataUrl, options);
+  const offsetDataUrl = await makeOffsetDataUrl(repairSourceUrl, { format: "png" });
+  const maskDataUrl = await makeOffsetRepairMaskDataUrl(offsetDataUrl);
+  const payload = await requestImageGeneration({
+    image: {
+      name: "qa-offset-seam-repair.png",
+      type: "image/png",
+      dataUrl: offsetDataUrl,
+    },
+    mask: {
+      name: "qa-offset-seam-mask.png",
+      type: "image/png",
+      dataUrl: maskDataUrl,
+    },
+    prompt: buildOffsetRepairPrompt(previousCheck),
+    size: options.size || els.size?.value || "1024x1536",
+  });
+
+  const blendedOffset = await blendMaskedRepairDataUrl(offsetDataUrl, payload.image.dataUrl, maskDataUrl, { strength: 1.08 });
+  const restored = await makeOffsetDataUrl(blendedOffset, { reverse: true, format: "png" });
+  return await makeJpg(restored, {
+    enhance: shouldPrintClarityEnhance(previousCheck),
+    strength: Math.max(getEnhanceStrength(), 0.3),
+    repair: false,
+  });
+}
+
+async function prepareAiRepairSourceDataUrl(dataUrl, options = {}) {
+  const source = /^data:/i.test(String(dataUrl || "")) ? dataUrl : await imageUrlToDataUrl(dataUrl);
+  const maxSide = options.maxSide || 1536;
+  return await resizeDataUrlForAiRepair(source, maxSide);
+}
+
+function resizeDataUrlForAiRepair(dataUrl, maxSide = 1536) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        if (scale >= 1) {
+          resolve(dataUrl);
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const png = canvas.toDataURL("image/png");
+        if (!png || png === "data:,") throw new Error("浏览器无法导出 AI 修缝源图。");
+        resolve(png);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+}
+
 async function improveWithAiInternalGuideRepair(task, initialCheck) {
   let best = {
     dataUrl: task.resultDataUrl,
@@ -3181,6 +3270,8 @@ function installQaTools() {
     makeInternalGuideRepairMaskDataUrl,
     makeEdgeBlendRepairJpg,
     makeStrictSeamlessJpg,
+    makeQaAiInternalGuideRepairJpg,
+    makeQaAiOffsetRepairJpg,
   });
 
   const output = document.createElement("pre");

@@ -399,6 +399,16 @@ This keeps edge continuity while preserving enough local texture for fabric prin
 - QA mode can run a staged repair pipeline check, reporting edge, internal-guide, raw-refine, and encoded-refine metrics separately so JPEG/export artifacts are not confused with the raw repair algorithm.
 - `tools/qa-dump.mjs` can run the browser QA page through headless Chrome and extract the `qaOutput` JSON. Use `--summary` for compact pass/fail metrics when measuring batch success rate toward the 80% target.
 
+## 0.7.66 Batch Success-Rate QA
+
+- The 80% target means batch yield: for example, 80 of 100 generated images must pass the unchanged four-way repeat gate. It does not mean accepting weaker seams on individual images.
+- `tools/qa-batch.mjs` runs the browser QA engine once and checks many history images through `window.YUANYE_QA.checkSeamStructureQuality`, so batch statistics use the same seam logic as the site.
+- Default batch mode tests the newest non-`repair-` history JPG files, keeping real generated outputs separate from repair experiments.
+- `--repair=pipeline` measures the current local automatic repair chain after generation, `--repair=strict` measures the strict periodic fallback, and `--repair=none` measures raw generated tiles. Report these separately when evaluating whether the system is near the 80% usable-output goal.
+- `--repair=ai-internal`, `--repair=ai-offset`, and `--repair=ai-auto` run real image API repair calls for seam transition testing. Use a 1-3 image smoke test before any large batch because these modes consume upstream image credits and can take minutes per image.
+- Protected test sites are supported: the tool reads `YUANYE_PASSWORD` from the shell or local `.env` by default and logs into `/api/login` before opening the QA page.
+- The report includes pass count, fail count, pass rate, error count, and failure-reason distribution so the next repair change can target the dominant blocker instead of a single anecdotal image.
+
 ## 0.7.13 Success-Rate Changes
 
 - Automatic regeneration was raised to four tries total.

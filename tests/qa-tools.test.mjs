@@ -11,6 +11,8 @@ test("QA seam tools are gated behind the qa query flag", () => {
   assert.match(installQaTools, /params\.get\("qa"\) !== "1"/);
   assert.match(installQaTools, /window\.YUANYE_QA = Object\.freeze/);
   assert.match(installQaTools, /checkSeamStructureQuality: \(dataUrl\) => checkSeamQuality\(dataUrl, \{ skipPrintSpec: true \}\)/);
+  assert.match(installQaTools, /makeQaAiInternalGuideRepairJpg/);
+  assert.match(installQaTools, /makeQaAiOffsetRepairJpg/);
   assert.match(installQaTools, /output\.id = "qaOutput"/);
   assert.match(installQaTools, /params\.get\("qaCheck"\)/);
   assert.match(installQaTools, /runQaCheck\(checkUrl, params\.get\("qaMode"\) \|\| "full", output\)/);
